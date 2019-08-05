@@ -47,8 +47,8 @@ class DocMatcher(object):
         ([(['heisenberg'], {})], {})
         >>> DocMatcher.return_if_match(doc) is not None
         False
-        >>> DocMatcher.parse('title = ein')
-        ([(['title', '=', 'ein'], {})], {})
+        >>> DocMatcher.parse('title : ein')
+        ([(['title', ':', 'ein'], {})], {})
         >>> DocMatcher.return_if_match(doc) is not None
         True
 
@@ -95,14 +95,14 @@ class DocMatcher(object):
         :type  search: str
         :returns: Parsed query
         :rtype:  list
-        >>> print(DocMatcher.parse('hello author = einstein'))
-        [['hello'], ['author', '=', 'einstein']]
+        >>> print(DocMatcher.parse('hello author : einstein'))
+        [['hello'], ['author', ':', 'einstein']]
         >>> print(DocMatcher.parse(''))
         []
         >>> print(\
             DocMatcher.parse(\
-                '"hello world whatever =" tags = \\\'hello ====\\\''))
-        [['hello world whatever ='], ['tags', '=', 'hello ====']]
+                '"hello world whatever :" tags : \\\'hello ::::\\\''))
+        [['hello world whatever :'], ['tags', ':', 'hello ::::']]
         >>> print(DocMatcher.parse('hello'))
         [['hello']]
         """
@@ -113,22 +113,23 @@ class DocMatcher(object):
 
 
 def parse_query(query_string):
-    """
-    >>> print(parse_query('hello   author = einstein'))
-    [['hello'], ['author', '=', 'einstein']]
-    """
     import pyparsing
     logger = logging.getLogger('query_parser')
     logger.debug('Parsing search')
-    papis_key = pyparsing.Word(pyparsing.alphanums + '-')
+
+    papis_key = pyparsing.Word(pyparsing.alphanums + '-._/')
+
     papis_value = pyparsing.QuotedString(
         quoteChar='"', escChar='\\', escQuote='\\'
     ) ^ pyparsing.QuotedString(
         quoteChar="'", escChar='\\', escQuote='\\'
     ) ^ papis_key
-    equal = pyparsing.ZeroOrMore(" ") + \
-        pyparsing.Literal('=') + \
+
+    equal = (
+        pyparsing.ZeroOrMore(" ") +
+        pyparsing.Literal(':') +
         pyparsing.ZeroOrMore(" ")
+    )
 
     papis_query = pyparsing.ZeroOrMore(
         pyparsing.Group(
