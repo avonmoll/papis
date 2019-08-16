@@ -28,7 +28,8 @@ bibtex_types = [
 bibtex_type_converter = {
   "conferencePaper": "inproceedings",
   "journalArticle": "article",
-  "journal": "article"
+  "journal": "article",
+  "bookSection": "inbook"
 }
 
 bibtex_keys = [
