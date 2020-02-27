@@ -1,41 +1,32 @@
-# -*- coding: utf-8 -*-
-import subprocess
-import multiprocessing
-import time
 from itertools import count, product
+from typing import Optional, List, Iterator, Any, Dict, Union
+import copy
+import logging
+import multiprocessing
 import os
 import re
-import papis.pick
+import shlex
+import subprocess
+import time
+
+import colorama
+
 import papis.config
-import papis.commands
-import papis.document
-import papis.crossref
-import papis.bibtex
 import papis.exceptions
-import logging
+import papis.importer
+import papis.downloaders
+import papis.document
+import papis.database
 
-logger = logging.getLogger("utils")
-logger.debug("importing")
+LOGGER = logging.getLogger("utils")
+LOGGER.debug("importing")
 
 
-def general_open(fileName, key, default_opener=None, wait=True):
+def general_open(
+        file_name: str, key: str,
+        default_opener: Optional[str] = None,
+        wait: bool = True) -> None:
     """Wraper for openers
-
-
-    >>> import tempfile; path = tempfile.mktemp()
-    >>> general_open(path, 'nonexistent-key', wait=False).stdin == None
-    True
-    >>> general_open(path, 'nonexistent-key') > 0
-    True
-    >>> general_open([path], 'nonexistent-key', default_opener=lambda path: 42)
-    42
-    >>> general_open([path], 'nonexistent-key', default_opener=tempfile)
-    Traceback (most recent call last):
-    ...
-    Warning: How should I use the opener ...?
-    >>> papis.config.set('editor', 'echo')
-    >>> general_open([path], 'editor', wait=False)
-    <subprocess.Popen...>
     """
     try:
         opener = papis.config.get(key)
@@ -43,58 +34,32 @@ def general_open(fileName, key, default_opener=None, wait=True):
         if default_opener is None:
             default_opener = papis.config.get_default_opener()
         opener = default_opener
-    if isinstance(fileName, list):
-        fileName = papis.pick.pick(fileName)
-    if isinstance(opener, str):
-        import shlex
-        cmd = shlex.split("{0} '{1}'".format(opener, fileName))
-        logger.debug("cmd:  %s" % cmd)
-        if wait:
-            logger.debug("Waiting for process to finsih")
-            return subprocess.call(cmd)
-        else:
-            logger.debug("Not waiting for process to finish")
-            return subprocess.Popen(
-                cmd, shell=False,
-                stdin=None, stdout=None, stderr=None, close_fds=True
-            )
-    elif hasattr(opener, '__call__'):
-        return opener(fileName)
+    cmd = shlex.split("{0} '{1}'".format(opener, file_name))
+    LOGGER.debug("cmd:  %s", cmd)
+    if wait:
+        LOGGER.debug("Waiting for process to finsih")
+        subprocess.call(cmd)
     else:
-        raise Warning("How should I use the opener %s?" % opener)
+        LOGGER.debug("Not waiting for process to finish")
+        subprocess.Popen(
+            cmd, shell=False,
+            stdin=None, stdout=None, stderr=None, close_fds=True)
 
 
-def format_doc(python_format, document, key=""):
-    """Construct a string using a pythonic format string and a document.
+def open_file(file_path: str, wait: bool = True) -> None:
+    """Open file using the ``opentool`` key value as a program to
+    handle file_path.
 
-    :param python_format: Python-like format string.
-        (`see <
-            https://docs.python.org/2/library/string.html#format-string-syntax
-        >`_)
-    :type  python_format: str
-    :param document: Papis document
-    :type  document: papis.document.Document
-    :returns: Formated string
-    :rtype: str
+    :param file_path: File path to be handled.
+    :type  file_path: str
+    :param wait: Wait for the completion of the opener program to continue
+    :type  wait: bool
+
     """
-    doc = key or papis.config.get("format-doc-name")
-    if papis.config.getboolean('format-jinja2-enable') is True:
-        try:
-            import jinja2
-        except ImportError:
-            logger.error("""
-            You're trying to format strings using jinja2
-            Jinja2 is not installed by default, so just install it
-
-                pip3 install jinja2
-
-            """)
-        else:
-            return jinja2.Template(python_format).render(**{doc: document})
-    return python_format.format(**{doc: document})
+    general_open(file_name=file_path, key="opentool", wait=wait)
 
 
-def get_folders(folder):
+def get_folders(folder: str) -> List[str]:
     """This is the main indexing routine. It looks inside ``folder`` and crawls
     the whole directory structure in search for subfolders containing an info
     file.
@@ -104,16 +69,17 @@ def get_folders(folder):
     :returns: List of folders containing an info file.
     :rtype: list
     """
-    logger.debug("Indexing folders in '{0}'".format(folder))
+    LOGGER.debug("Indexing folders in '{0}'".format(folder))
     folders = list()
     for root, dirnames, filenames in os.walk(folder):
-        if os.path.exists(os.path.join(root, papis.config.get('info-name'))):
+        if os.path.exists(
+                os.path.join(root, papis.config.getstring('info-name'))):
             folders.append(root)
-    logger.debug("{0} valid folders retrieved".format(len(folders)))
+    LOGGER.debug("{0} valid folders retrieved".format(len(folders)))
     return folders
 
 
-def create_identifier(input_list):
+def create_identifier(input_list: str) -> Iterator[str]:
     """This creates a generator object capable of iterating over lists to
     create combinations of that list that result in unique strings.
     Ideally for use in modifying an existing string to make it unique.
@@ -137,192 +103,7 @@ def create_identifier(input_list):
             yield ''.join(s)
 
 
-def confirm(prompt, yes=True, bottom_toolbar=None):
-    """Confirm with user input
-
-    :param prompt: Question or text that the user gets.
-    :type  prompt: str
-    :param yes: If yes should be the default.
-    :type  yes: bool
-    :returns: True if go ahead, False if stop
-    :rtype:  bool
-
-    """
-    result = papis.utils.input(
-        prompt,
-        bottom_toolbar=bottom_toolbar,
-        default='Y/n' if yes else 'y/N',
-        validator_function=lambda x: x in 'YyNn',
-        dirty_message='Please, write either "y" or "n" to confirm'
-    )
-    if yes:
-        return result not in 'Nn'
-    else:
-        return result in 'Yy'
-
-
-def text_area(title, text, lexer_name="", height=10, full_screen=False):
-    """
-    Small implementation of an editor/pager for small pieces of text.
-
-    :param title: Title of the text_area
-    :type  title: str
-    :param text: Editable text
-    :type  text: str
-    :param lexer_name: If the editable text should be highlighted with
-        some kind of grammar, examples are ``yaml``, ``python`` ...
-    :type  lexer_name: str
-    :param height: Max height of the text area
-    :type  height: int
-    :param full_screen: Wether or not the text area should be full screen.
-    :type  full_screen: bool
-    """
-    from prompt_toolkit import Application
-    from prompt_toolkit.enums import EditingMode
-    from prompt_toolkit.buffer import Buffer
-    from prompt_toolkit.layout.containers import HSplit, Window, WindowAlign
-    from prompt_toolkit.layout.controls import (
-        BufferControl, FormattedTextControl
-    )
-    from prompt_toolkit.layout.layout import Layout
-    from prompt_toolkit.layout import Dimension
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.lexers import PygmentsLexer
-    from pygments.lexers import find_lexer_class_by_name
-    assert(type(title) == str)
-    assert(type(text) == str)
-    assert(type(lexer_name) == str)
-    assert(type(height) == int)
-    assert(type(full_screen) == bool)
-
-    kb = KeyBindings()
-    buffer1 = Buffer()
-    buffer1.text = text
-
-    @kb.add('c-q')
-    def exit_(event):
-        event.app.exit(0)
-
-    @kb.add('c-s')
-    def save_(event):
-        event.app.return_text = buffer1.text
-
-    class App(Application):
-        return_text = None
-
-    text_height = Dimension(min=0, max=height) if height is not None else None
-
-    pygment_lexer = find_lexer_class_by_name(lexer_name)
-    lexer = PygmentsLexer(pygment_lexer)
-    text_window = Window(
-        height=text_height,
-        content=BufferControl(buffer=buffer1, lexer=lexer)
-    )
-
-    root_container = HSplit([
-        Window(
-            char='-',
-            align=WindowAlign.CENTER,
-            height=1,
-            content=FormattedTextControl(
-                text=[('fg:ansiblack bg:ansiwhite', title)]
-            ),
-            always_hide_cursor=True
-        ),
-
-        text_window,
-
-        Window(
-            height=1,
-            width=None,
-            align=WindowAlign.CENTER,
-            char='-',
-            content=FormattedTextControl(
-                text=[(
-                    'fg:ansiblack bg:ansiwhite',
-                    "Quit [Ctrl-q]  Save [Ctrl-s]"
-                )]
-            )
-        ),
-    ])
-
-    layout = Layout(root_container)
-
-    layout.focus(text_window)
-
-    app = App(
-        editing_mode=(
-            EditingMode.EMACS
-            if papis.config.get('editmode', section='tui') == 'emacs'
-            else EditingMode.VI
-        ), layout=layout, key_bindings=kb, full_screen=full_screen
-    )
-    app.run()
-    return app.return_text
-
-
-def yes_no_dialog(title, text):
-    from prompt_toolkit.shortcuts import yes_no_dialog
-    from prompt_toolkit.styles import Style
-
-    example_style = Style.from_dict({
-        'dialog': 'bg:#88ff88',
-        'dialog frame-label': 'bg:#ffffff #000000',
-        'dialog.body': 'bg:#000000 #00ff00',
-        'dialog shadow': 'bg:#00aa00',
-    })
-
-    return yes_no_dialog(
-        title=title,
-        text=text,
-        style=example_style
-    )
-
-
-def input(
-        prompt, default="", bottom_toolbar=None, multiline=False,
-        validator_function=None, dirty_message=""):
-    """Prompt user for input
-
-    :param prompt: Question or text that the user gets.
-    :type  prompt: str
-    :param default: Default value to give if the user does not input anything
-    :type  default: str
-    :returns: User input or default
-    :rtype:  bool
-
-    """
-    import prompt_toolkit
-    import prompt_toolkit.validation
-    if validator_function is not None:
-        validator = prompt_toolkit.validation.Validator.from_callable(
-            validator_function,
-            error_message=dirty_message,
-            move_cursor_to_end=True
-        )
-    else:
-        validator = None
-    if isinstance(prompt, str):
-        fragments = [
-            ('', prompt),
-            ('fg:red', ' ({0})'.format(default)),
-            ('', ': '),
-        ]
-    else:
-        fragments = prompt
-
-    result = prompt_toolkit.prompt(
-        fragments,
-        validator=validator,
-        multiline=multiline,
-        bottom_toolbar=bottom_toolbar,
-        validate_while_typing=True
-    )
-
-    return result if result else default
-
-
-def clean_document_name(doc_path):
+def clean_document_name(doc_path: str) -> str:
     """Get a file path and return the basename of the path cleaned.
 
     It will also turn chinese, french, russian etc into ascii characters.
@@ -335,34 +116,15 @@ def clean_document_name(doc_path):
     """
     import slugify
     regex_pattern = r'[^a-z0-9.]+'
-    return slugify.slugify(
+    return str(slugify.slugify(
         os.path.basename(doc_path),
         word_boundary=True,
-        regex_pattern=regex_pattern
-    )
+        regex_pattern=regex_pattern))
 
 
-def git_commit(path="", message=""):
-    """Commits changes in the path with a message.
-    If the path is not given, then the lib path is used.
-
-    :param path: Folder where a git repo exists.
-    :type  path: str
-    :param message: Commit message
-    :type  message: str
-    :returns: None
-
-    """
-    logger.debug('Commiting...')
-    dirs = papis.config.get_lib_dirs()
-    path = path or os.path.expanduser(dirs[0])
-    message = '-m "%s"' % message if len(message) > 0 else ''
-    cmd = ['git', '-C', path, 'commit', message]
-    logger.debug(cmd)
-    subprocess.call(cmd)
-
-
-def locate_document_in_lib(document, library=None):
+def locate_document_in_lib(
+        document: papis.document.Document,
+        library: Optional[str] = None) -> papis.document.Document:
     """Try to figure out if a document is already in a library
 
     :param document: Document to be searched for
@@ -373,8 +135,9 @@ def locate_document_in_lib(document, library=None):
     :rtype:  papis.document.Document
     :raises IndexError: Whenever document is not found in the library
     """
-    db = papis.database.get(library=library)
-    comparing_keys = eval(papis.config.get('unique-document-keys'))
+    db = papis.database.get(library_name=library)
+    comparing_keys = papis.config.getlist('unique-document-keys')
+    assert comparing_keys is not None
 
     for k in comparing_keys:
         if not document.has(k):
@@ -386,7 +149,10 @@ def locate_document_in_lib(document, library=None):
     raise IndexError("Document not found in library")
 
 
-def locate_document(document, documents):
+def locate_document(
+        document: papis.document.Document,
+        documents: List[papis.document.Document]
+        ) -> Optional[papis.document.Document]:
     """Try to figure out if a document is already within a list of documents.
 
     :param document: Document to be searched for
@@ -398,32 +164,17 @@ def locate_document(document, documents):
     """
     # if these keys exist in the documents, then check those first
     # TODO: find a way to really match well titles and author
-    comparing_keys = eval(papis.config.get('unique-document-keys'))
+    comparing_keys = papis.config.getlist('unique-document-keys')
+    assert comparing_keys is not None
     for d in documents:
         for key in comparing_keys:
             if key in document.keys() and key in d.keys():
                 if re.match(document[key], d[key], re.I):
                     return d
+    return None
 
 
-def get_document_extension(document_path):
-    """Get document extension
-
-    :document_path: Path of the document
-    :returns: Extension (string)
-
-    """
-    import filetype
-    filetype.guess(document_path)
-    kind = filetype.guess(document_path)
-    if kind is None:
-        m = re.match(r"^.*\.([^.]+)$", os.path.basename(document_path))
-        return m.group(1) if m else 'data'
-    else:
-        return kind.extension
-
-
-def folders_to_documents(folders):
+def folders_to_documents(folders: List[str]) -> List[papis.document.Document]:
     """Turn folders into documents, this is done in a multiprocessing way, this
     step is quite critical for performance.
 
@@ -444,7 +195,7 @@ def folders_to_documents(folders):
     return result
 
 
-def get_cache_home():
+def get_cache_home() -> str:
     """Get folder where the cache files are stored, it retrieves the
     ``cache-dir`` configuration setting. It is ``XDG`` standard compatible.
 
@@ -457,7 +208,7 @@ def get_cache_home():
         path = os.path.expanduser(user_defined)
     else:
         path = os.path.expanduser(
-            os.path.join(os.environ.get('XDG_CACHE_HOME'), 'papis')
+            os.path.join(str(os.environ.get('XDG_CACHE_HOME')), 'papis')
         ) if os.environ.get(
             'XDG_CACHE_HOME'
         ) else os.path.expanduser(
@@ -465,4 +216,47 @@ def get_cache_home():
         )
     if not os.path.exists(path):
         os.makedirs(path)
-    return path
+    return str(path)
+
+
+def get_matching_importer_or_downloader(
+        matching_string: str
+        ) -> List[papis.importer.Importer]:
+    importers = []  # type: List[papis.importer.Importer]
+    logger = logging.getLogger("utils:matcher")
+    _imps = papis.importer.get_importers()
+    _downs = papis.downloaders.get_available_downloaders()
+    _all_importers = list(_imps) + list(_downs)
+    for importer_cls in _all_importers:
+        logger.debug(
+            "trying with importer {c.Back.BLACK}{c.Fore.YELLOW}{name}"
+            "{c.Style.RESET_ALL}".format(c=colorama, name=importer_cls))
+        importer = importer_cls.match(
+            matching_string)  # type: Optional[papis.importer.Importer]
+        if importer:
+            logger.info(
+                "{f} {c.Back.BLACK}{c.Fore.GREEN}matches {name}"
+                "{c.Style.RESET_ALL}".format(
+                    f=matching_string, c=colorama, name=importer.name))
+            try:
+                importer.fetch()
+            except Exception as e:
+                logger.error(e)
+            else:
+                importers.append(importer)
+    return importers
+
+
+def update_doc_from_data_interactively(
+        document: Union[papis.document.Document, Dict[str, Any]],
+        data: Dict[str, Any], data_name: str) -> None:
+    import papis.tui.widgets.diff
+    docdata = copy.copy(document)
+    # do not compare some entries
+    docdata.pop('files', None)
+    docdata.pop('tags', None)
+    document.update(
+        papis.tui.widgets.diff.diffdict(
+            docdata,
+            data,
+            namea=papis.document.describe(document), nameb=data_name))

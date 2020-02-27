@@ -1,21 +1,21 @@
+from papis.bibtex import to_bibtex
 from papis.document import (
-    to_bibtex,
     new,
     to_json,
     from_folder,
     from_data,
+    format_doc,
     Document,
+    sort
 )
 import tempfile
 import papis.config
 import pickle
 import os
-from tests import (
-    create_random_file
-)
+from tests import create_random_file, setup_test_library
 
 
-def test_new():
+def test_new() -> None:
     N = 10
     files = [create_random_file(suffix='.' + str(i)) for i in range(N)]
     tmp = os.path.join(tempfile.mkdtemp(), 'doc')
@@ -37,14 +37,14 @@ def test_new():
     assert(len(doc.get_files()) == 0)
 
 
-def test_from_data():
+def test_from_data() -> None:
     doc = from_data(
         {'title': 'Hello World', 'author': 'turing'}
     )
     assert(isinstance(doc, Document))
 
 
-def test_from_folder():
+def test_from_folder() -> None:
     doc = from_folder(os.path.join(
         os.path.dirname(__file__), 'resources', 'document'
     ))
@@ -52,18 +52,18 @@ def test_from_folder():
     assert(doc['author'] == 'Russell, Bertrand')
 
 
-def test_main_features():
+def test_main_features() -> None:
     doc = from_data(
         {'title': 'Hello World', 'author': 'turing'}
     )
-    assert(doc.title == 'Hello World')
-    assert(doc.title == doc['title'])
+    assert(doc['title'] == 'Hello World')
+    assert(doc['title'] == doc['title'])
     assert(doc.has('title'))
     assert(set(doc.keys()) == set(['title', 'author']))
     assert(not doc.has('doi'))
     doc['doi'] = '123123.123123'
     assert(doc.has('doi'))
-    assert(doc.doi == doc['doi'])
+    assert(doc['doi'] == doc['doi'])
     del doc['doi']
     assert(doc['doi'] is '')
     assert(set(doc.keys()) == set(['title', 'author']))
@@ -82,7 +82,7 @@ def test_main_features():
     assert(doc.html_escape['author'] == 'Russell, Bertrand')
 
 
-def test_to_bibtex():
+def test_to_bibtex() -> None:
     papis.config.set('bibtex-journal-key', 'journal_abbrev')
     doc = from_data({'title': 'Hello', 'type': 'book', 'journal': 'jcp'})
     doc.set_folder('path/to/superfolder')
@@ -103,7 +103,7 @@ def test_to_bibtex():
     )
 
 
-def test_to_json():
+def test_to_json() -> None:
     doc = from_data({'title': 'Hello World'})
     assert(
         to_json(doc) ==
@@ -111,7 +111,7 @@ def test_to_json():
     )
 
 
-def test_pickle():
+def test_pickle() -> None:
     docs = [
         from_data({'title': 'Hello World'}),
         from_data({'author': 'Turing'}),
@@ -123,5 +123,28 @@ def test_pickle():
     with open(filepath, 'rb') as fd:
         gotdocs = pickle.load(fd)
 
-    assert(gotdocs[0].title == docs[0].title)
-    assert(gotdocs[1].author == docs[1].author)
+    assert(gotdocs[0]['title'] == docs[0]['title'])
+    assert(gotdocs[1]['author'] == docs[1]['author'])
+
+
+def test_sort() -> None:
+    docs = [
+        from_data(dict(title="Hello world", year=1990)),
+        from_data({'author': 'Turing', 'year': "1932"}),
+    ]
+    sDocs = sort(docs, key="year", reverse=False)
+    assert(sDocs[0] == docs[1])
+
+
+def test_format_doc():
+    setup_test_library()
+    document = from_data(dict(author='Fulano', title='Something'))
+
+    assert format_doc('{doc[author]}{doc[title]}', document) == \
+        'FulanoSomething'
+    assert format_doc('{doc[author]}{doc[title]}{doc[blahblah]}', document) ==\
+        'FulanoSomething'
+
+    assert(format_doc(
+        '{doc[author]}{doc[title]}{doc[blahblah]}', dict(title='hell'))
+        == 'hell')

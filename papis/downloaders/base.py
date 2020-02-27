@@ -1,193 +1,145 @@
-import os
-import logging
-import requests
+import re
+from typing import Any, List, Dict, Union, Pattern
+from typing_extensions import TypedDict
+
+import bs4
+
+import papis.bibtex
 import papis.config
+import papis.document
+import papis.importer
 import papis.utils
-import filetype
 
 
-class Downloader(object):
+MetaEquivalence = TypedDict(
+    "MetaEquivalence", {
+        "tag": str,
+        "key": str,
+        "attrs": Dict[str, Union[str, Pattern[str]]],
+    }
+)
 
-    """This is the base class for every downloader.
-    """
+meta_equivalences = [
+    # google
+    {"tag": "meta", "key": "abstract", "attrs": {"name": "description"}},
+    {"tag": "meta", "key": "doi", "attrs": {"name": "doi"}},
+    {"tag": "meta", "key": "keywords", "attrs": {"name": "keywords"}},
+    {"tag": "title", "key": "title", "attrs": {}},
+    # facebook
+    {"tag": "meta", "key": "type", "attrs": {"property": "og:type"}},
+    {"tag": "meta",
+        "key": "abstract", "attrs": {"property": "og:description"}},
+    {"tag": "meta", "key": "title", "attrs": {"property": "og:title"}},
+    {"tag": "meta", "key": "url", "attrs": {"property": "og:url"}},
+    # citation style
+    # https://scholar.google.com/intl/en/scholar/inclusion.html#indexing
+    {"tag": "meta", "key": "doi", "attrs": {"name": "citation_doi"}},
+    {"tag": "meta",
+        "key": "firstpage", "attrs": {"name": "citation_firstpage"}},
+    {"tag": "meta", "key": "lastpage", "attrs": {"name": "citation_lastpage"}},
+    {"tag": "meta",
+        "key": "url", "attrs": {"name": "citation_fulltext_html_url"}},
+    {"tag": "meta", "key": "pdf_url", "attrs": {"name": "citation_pdf_url"}},
+    {"tag": "meta", "key": "issn", "attrs": {"name": "citation_issn"}},
+    {"tag": "meta", "key": "issue", "attrs": {"name": "citation_issue"}},
+    {"tag": "meta", "key": "abstract", "attrs": {"name": "citation_abstract"}},
+    {"tag": "meta",
+        "key": "journal_abbrev", "attrs": {"name": "citation_journal_abbrev"}},
+    {"tag": "meta",
+        "key": "journal", "attrs": {"name": "citation_journal_title"}},
+    {"tag": "meta", "key": "language", "attrs": {"name": "citation_language"}},
+    {"tag": "meta",
+        "key": "online_date", "attrs": {"name": "citation_online_date"}},
+    {"tag": "meta",
+        "key": "publication_date",
+        "attrs": {"name": "citation_publication_date"}},
+    {"tag": "meta",
+        "key": "publisher", "attrs": {"name": "citation_publisher"}},
+    {"tag": "meta", "key": "title", "attrs": {"name": "citation_title"}},
+    {"tag": "meta", "key": "volume", "attrs": {"name": "citation_volume"}},
+    # dc.{id} style
+    {"tag": "meta",
+        "key": "publisher",
+        "attrs": {"name": re.compile("dc.publisher", re.I)}},
+    {"tag": "meta",
+        "key": "publisher",
+        "attrs": {"name": re.compile(".*st.publisher.*", re.I)}},
+    {"tag": "meta",
+        "key": "date", "attrs": {"name": re.compile("dc.date", re.I)}},
+    {"tag": "meta",
+        "key": "language", "attrs": {"name": re.compile("dc.language", re.I)}},
+    {"tag": "meta",
+        "key": "issue",
+        "attrs": {"name": re.compile("dc.citation.issue", re.I)}},
+    {"tag": "meta",
+            "key": "volume",
+            "attrs": {"name": re.compile("dc.citation.volume", re.I)}},
+    {"tag": "meta",
+            "key": "keywords",
+            "attrs": {"name": re.compile("dc.subject", re.I)}},
+    {"tag": "meta",
+            "key": "title", "attrs": {"name": re.compile("dc.title", re.I)}},
+    {"tag": "meta",
+            "key": "type", "attrs": {"name": re.compile("dc.type", re.I)}},
+    {"tag": "meta",
+            "key": "abstract",
+            "attrs": {"name": re.compile("dc.description", re.I)}},
+    {"tag": "meta",
+            "key": "abstract",
+            "attrs": {"name": re.compile("dc.description.abstract", re.I)}},
+    {"tag": "meta",
+            "key": "journal_abbrev",
+            "attrs": {"name": re.compile("dc.relation.ispartof", re.I)}},
+    {"tag": "meta",
+            "key": "year", "attrs": {"name": re.compile("dc.issued", re.I)}},
+    {"tag": "meta",
+            "key": "doi",
+            "attrs": {"name": re.compile("dc.identifier", re.I),
+                      "scheme": "doi"}},
+]  # type: List[MetaEquivalence]
 
-    def __init__(self, url="", name=""):
-        self.url = url
-        self.name = name or os.path.basename(__file__)
-        self.logger = logging.getLogger("downloaders:"+self.name)
-        self.bibtex_data = None
-        self.document_data = None
-        self.logger.debug("[url] = %s" % url)
-        self.expected_document_extension = None
-        self.priority = 1
 
-        self.session = requests.Session()
-        self.session.headers = {
-            'User-Agent': papis.config.get('user-agent')
-        }
-        proxy = papis.config.get('downloader-proxy')
-        if proxy is not None:
-            self.session.proxies = {
-                'http': proxy,
-                'https': proxy,
-            }
-        self.cookies = {}
+def parse_meta_headers(soup: bs4.BeautifulSoup) -> Dict[str, Any]:
+    global meta_equivalences
+    # metas = soup.find_all(name="meta")
+    data = dict()  # type: Dict[str, Any]
+    for equiv in meta_equivalences:
+        elements = soup.find_all(equiv['tag'], attrs=equiv["attrs"])
+        if elements:
+            value = elements[0].attrs.get("content")
+            data[equiv["key"]] = str(value).replace('\r', '')
 
-    def __repr__(self):
-        return self.name
+    author_list = parse_meta_authors(soup)
+    if author_list:
+        data['author_list'] = author_list
+        data['author'] = papis.document.author_list_to_author(data)
 
-    @classmethod
-    def match(url):
-        """This method should be called to know if a given url matches
-        the downloader or not.
+    return data
 
-        For example, a valid match for archive would be:
-        .. code:: python
 
-            return re.match(r".*arxiv.org.*", url)
+def parse_meta_authors(soup: bs4.BeautifulSoup) -> List[Dict[str, Any]]:
+    author_list = []  # type: List[Dict[str, Any]]
+    authors = soup.find_all(name='meta', attrs={'name': 'citation_author'})
+    if not authors:
+        authors = soup.find_all(
+            name='meta', attrs={'name': re.compile('dc.creator', re.I)})
+    affs = soup.find_all(
+        name='meta',
+        attrs={'name': 'citation_author_institution'})
+    if affs and authors:
+        tuples = zip(authors, affs)
+    elif authors:
+        tuples = ((a, None) for a in authors)
+    else:
+        return []
 
-        it will return something that is true if it matches and something
-        falsely otherwise.
-
-        :param url: Url where the document should be retrieved from.
-        :type  url: str
-        """
-        raise NotImplementedError(
-            "Matching url not implemented for this downloader"
-        )
-
-    def get_bibtex_url(self):
-        """It returns the urls that is to be access to download
-        the bibtex information. It has to be implemented for every
-        downloader, or otherwise it will raise an exception.
-
-        :returns: Bibtex url
-        :rtype:  str
-        """
-        raise NotImplementedError(
-            "Getting bibtex url not implemented for this downloader"
-        )
-
-    def get_bibtex_data(self):
-        """Get the bibtex_data data if it has been downloaded already
-        and if not download it and return the data in utf-8 format.
-
-        :returns: Bibtex data in utf-8 format
-        :rtype:  str
-        """
-        if not self.bibtex_data:
-            self.download_bibtex()
-        return self.bibtex_data
-
-    def download_bibtex(self):
-        """Bibtex downloader, it should try to download bibtex information from
-        the url provided by ``get_bibtex_url``.
-
-        It sets the ``bibtex_data`` attribute if it succeeds.
-
-        :returns: Nothing
-        :rtype:  None
-        """
-        url = self.get_bibtex_url()
-        if not url:
-            return False
-        res = self.session.get(url, cookies=self.cookies)
-        self.bibtex_data = res.content.decode()
-
-    def get_document_url(self):
-        """It returns the urls that is to be access to download
-        the document information. It has to be implemented for every
-        downloader, or otherwise it will raise an exception.
-
-        :returns: Document url
-        :rtype:  str
-        """
-        raise NotImplementedError(
-            "Getting bibtex url not implemented for this downloader"
-        )
-
-    def get_doi(self):
-        """It returns the doi of the document, if it is retrievable.
-        It has to be implemented for every downloader, or otherwise it will
-        raise an exception.
-
-        :returns: Document doi
-        :rtype:  str
-        """
-        raise NotImplementedError(
-            "Getting document url not implemented for this downloader"
-        )
-
-    def get_document_data(self):
-        """Get the document_data data if it has been downloaded already
-        and if not download it and return the data in binary format.
-
-        :returns: Document data in binary format
-        :rtype:  str
-        """
-        if not self.document_data:
-            self.download_document()
-        return self.document_data
-
-    def download_document(self):
-        """Document downloader, it should try to download document information from
-        the url provided by ``get_document_url``.
-
-        It sets the ``document_data`` attribute if it succeeds.
-
-        :returns: Nothing
-        :rtype:  None
-        """
-        url = self.get_document_url()
-        if not url:
-            return False
-        self.logger.info("downloading file...")
-        res = self.session.get(url, cookies=self.cookies)
-        self.document_data = res.content
-
-    def get_url(self):
-        """Url getter for Downloader
-        :returns: Main url of the Downloader
-        :rtype:  str
-        """
-        return self.url
-
-    def check_document_format(self):
-        """Check if the downloaded document has the filetype that the
-        downloader expects. If the downloader does not expect any special
-        filetype, accept anything because there is no way to know if it is
-        correct.
-
-        :returns: True if it is of the right type, else otherwise
-        :rtype:  bool
-        """
-        def print_warning():
-            self.logger.error(
-                "The downloaded data does not seem to be of"
-                "the correct type (%s)" % self.expected_document_extension
-            )
-
-        if self.expected_document_extension is None:
-            return True
-
-        retrieved_kind = filetype.guess(self.get_document_data())
-
-        if retrieved_kind is None:
-            print_warning()
-            return False
-
-        self.logger.debug(
-            'retrieved kind of document seems to be {0}'.format(
-                retrieved_kind.mime)
-        )
-
-        if not isinstance(self.expected_document_extension, list):
-            expected_document_extensions = [
-                self.expected_document_extension
-            ]
-
-        if retrieved_kind.extension in expected_document_extensions:
-            return True
-        else:
-            print_warning()
-            return False
+    for t in tuples:
+        fullname = t[0].get('content')
+        affiliation = [dict(name=t[1].get('content'))] if t[1] else []
+        fullnames = re.split(r'\s+', fullname)
+        author_list.append(dict(
+            given=fullnames[0],
+            family=' '.join(fullnames[1:]),
+            affiliation=affiliation,
+        ))
+    return author_list

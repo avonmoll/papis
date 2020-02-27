@@ -1,75 +1,67 @@
 import logging
 import os
+import functools
+from typing import Callable, TypeVar, Generic, Sequence, Type
+from abc import ABC, abstractmethod
+
 import papis.config
-from papis.tui.app import Picker
-from stevedore import extension
+import papis.document
+import papis.plugin
 
-logger = logging.getLogger("pick")
-
-
-def stevedore_error_handler(manager, entrypoint, exception):
-    logger = logging.getLogger("pick:stevedore")
-    logger.error("Error while loading entrypoint [%s]" % entrypoint)
-    logger.error(exception)
+LOGGER = logging.getLogger("pick")
+T = TypeVar("T")
+Option = TypeVar("Option")
 
 
-def available_pickers():
-    return pickers_mgr.entry_points_names()
+class Picker(ABC, Generic[T]):
+
+    @abstractmethod
+    def __call__(
+            self,
+            items: Sequence[T],
+            header_filter: Callable[[T], str],
+            match_filter: Callable[[T], str],
+            default_index: int = 0
+            ) -> Sequence[T]:
+        ...
 
 
-def papis_pick(
-        options, default_index=0,
-        header_filter=lambda x: x, match_filter=lambda x: x
-        ):
-    if len(options) == 0:
-        return ""
-    if len(options) == 1:
-        return options[0]
-
-    picker = Picker(
-        options,
-        default_index,
-        header_filter,
-        match_filter
-    )
-    picker.run()
-    return picker.options_list.get_selection()
+def _extension_name() -> str:
+    return "papis.picker"
 
 
-pickers_mgr = extension.ExtensionManager(
-    namespace='papis.picker',
-    invoke_on_load=False,
-    verify_requirements=True,
-    propagate_map_exceptions=True,
-    on_load_failure_callback=stevedore_error_handler
-)
+def get_picker(name: str) -> Type[Picker[Option]]:
+    """Get the picker named 'name' declared as a plugin"""
+    picker = papis.plugin.get_extension_manager(
+        _extension_name())[name].plugin  # type: Type[Picker[Option]]
+    return picker
 
 
 def pick(
-        options,
-        default_index=0,
-        header_filter=lambda x: x,
-        match_filter=lambda x: x
-        ):
-    """Construct and start a :class:`Picker <Picker>`.
-    """
-    name = papis.config.get("picktool")
+        options: Sequence[Option],
+        default_index: int = 0,
+        header_filter: Callable[[Option], str] = str,
+        match_filter: Callable[[Option], str] = str) -> Sequence[Option]:
+
+    name = papis.config.getstring("picktool")
     try:
-        picker = pickers_mgr[name].plugin
+        picker = get_picker(name)  # type: Type[Picker[Option]]
     except KeyError:
-        logger.error("Invalid picker ({0})".format(name))
-        logger.error(
-            "Registered pickers are: {0}".format(available_pickers()))
+        LOGGER.error("Invalid picker (%s)", name)
+        LOGGER.error(
+            "Registered pickers are: %s",
+            papis.plugin.get_available_entrypoints(_extension_name()))
+        return []
     else:
-        return picker(
-            options,
-            default_index=default_index,
-            header_filter=header_filter,
-            match_filter=match_filter
-        )
+        return picker()(options,
+                        header_filter,
+                        match_filter,
+                        default_index)
 
 
-def pick_doc(documents):
+def pick_doc(
+        documents: Sequence[papis.document.Document]
+     ) -> Sequence[papis.document.Document]:
     """Pick a document from documents with the correct formatting
 
     :documents: List of documents
@@ -78,13 +70,13 @@ def pick_doc(documents):
     """
     header_format_path = papis.config.get('header-format-file')
     if header_format_path is not None:
-        with open(os.path.expanduser(header_format_path)) as fd:
-            header_format = fd.read()
+        with open(os.path.expanduser(header_format_path)) as _fd:
+            header_format = _fd.read()
     else:
-        header_format = papis.config.get("header-format")
-    match_format = papis.config.get("match-format")
-    pick_config = dict(
-        header_filter=lambda x: papis.utils.format_doc(header_format, x),
-        match_filter=lambda x: papis.utils.format_doc(match_format, x)
-    )
-    return pick(documents, **pick_config)
+        header_format = papis.config.getstring("header-format")
+    match_format = papis.config.getstring("match-format")
+    header_filter = functools.partial(papis.document.format_doc, header_format)
+    match_filter = functools.partial(papis.document.format_doc, match_format)
+    return pick(documents,
+                header_filter=header_filter,
+                match_filter=match_filter)

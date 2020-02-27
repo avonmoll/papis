@@ -28,20 +28,23 @@ def test_get_config_home():
 
 
 def test_get_config_dirs():
-    os.environ['XDG_CONFIG_DIRS'] = ''
-    os.environ['XDG_CONFIG_HOME'] = '/tmp'
+    tmpdir = '/tmp'
+    os.environ['XDG_CONFIG_HOME'] = tmpdir
     dirs = get_config_dirs()
+    assert os.environ.get('XDG_CONFIG_DIRS') is None
     assert len(dirs) == 2
-    assert '/tmp/papis' == dirs[0]
+    assert os.path.join('/', 'tmp', 'papis') == dirs[0]
 
     os.environ['XDG_CONFIG_DIRS'] = '/etc/:/usr/local/etc'
     os.environ['XDG_CONFIG_HOME'] = '~'
     dirs = get_config_dirs()
     assert len(dirs) == 4
-    assert '/etc/papis' == dirs[0]
-    assert '/usr/local/etc/papis' == dirs[1]
-    assert os.path.expanduser('~/papis') == dirs[2]
-    assert os.path.expanduser('~/.papis') == dirs[3]
+    assert os.path.abspath('/etc/papis') == os.path.abspath(dirs[0])
+    assert os.path.abspath('/usr/local/etc/papis') == os.path.abspath(dirs[1])
+    assert (os.path.abspath(os.path.expanduser('~/papis'))
+            == os.path.abspath(dirs[2]))
+    assert (os.path.abspath(os.path.expanduser('~/.papis'))
+            == os.path.abspath(dirs[3]))
 
 
 def test_get_config_folder():
@@ -190,9 +193,8 @@ def test_reset_configuration():
 
 def test_get_default_settings():
     import collections
-    assert(type(get_default_settings()) is collections.OrderedDict)
-    assert(get_default_settings(key='mvtool') == 'mv')
-    assert(get_default_settings(key='mvtool', section='settings') == 'mv')
+    assert(type(get_default_settings()) is dict)
+    assert(get_default_settings()['settings']['mvtool'] == 'mv')
 
 
 def test_register_default_settings():
@@ -210,30 +212,32 @@ def test_register_default_settings():
     assert(papis.config.get('hubhub') == 42)
     assert(papis.config.get('info-name') is not None)
     assert(not papis.config.get('default-library') == 'mag')
-    assert(papis.config.get_default_settings(key='default-library') == 'mag')
+    assert(
+        papis.config.get_default_settings()['settings']['default-library']
+        == 'mag')
 
 
 def test_get_list():
     papis.config.set('super-key-list', [1,2,3,4])
     assert(papis.config.get('super-key-list') == '[1, 2, 3, 4]')
-    assert(papis.config.getlist('super-key-list') == [1,2,3,4])
+    assert(papis.config.getlist('super-key-list') == ['1','2','3','4'])
 
     papis.config.set('super-key-list', ['asdf',2,3,4])
     assert(papis.config.get('super-key-list') == "['asdf', 2, 3, 4]")
-    assert(papis.config.getlist('super-key-list') == ['asdf',2,3,4])
+    assert(papis.config.getlist('super-key-list') == ['asdf','2','3','4'])
 
     papis.config.set('super-key-list', ['asdf',2,3,4])
     assert(papis.config.get('super-key-list') == "['asdf', 2, 3, 4]")
-    assert(papis.config.getlist('super-key-list') == ['asdf',2,3,4])
+    assert(papis.config.getlist('super-key-list') == ['asdf','2','3','4'])
 
     papis.config.set('super-key-list', "['asdf',2,3,4]")
     assert(papis.config.get('super-key-list') == "['asdf',2,3,4]")
-    assert(papis.config.getlist('super-key-list') == ['asdf',2,3,4])
+    assert(papis.config.getlist('super-key-list') == ['asdf','2','3','4'])
 
     papis.config.set('super-key-list', "[asdf,2,3,4]")
     assert(papis.config.get('super-key-list') == "[asdf,2,3,4]")
     try:
-        papis.config.getlist('super-key-list') == "[asdf,2,3,4]"
+        papis.config.getlist('super-key-list') == "[asdf,'2','3','4']"
     except SyntaxError as e:
         assert(
             str(e) == (

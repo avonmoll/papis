@@ -1,5 +1,7 @@
 import papis.downloaders
-from papis.arxiv import Downloader, get_data, find_arxivid_in_text
+from papis.arxiv import (
+    Downloader, get_data, find_arxivid_in_text, validate_arxivid
+)
 import papis.bibtex
 
 def test_general():
@@ -29,20 +31,22 @@ def test_find_arxiv_id():
 
 def test_match():
     assert(Downloader.match('arxiv.org/sdf'))
-    assert(Downloader.match('arxiv.com/!@#!@$!%!@%!$chemed.6b00559') is False)
+    assert(Downloader.match('arxiv.com/!@#!@$!%!@%!$chemed.6b00559') is None)
 
     down = Downloader.match('arXiv:1701.08223v2?234')
     assert(down)
-    assert(down.get_url() == 'https://arxiv.org/abs/1701.08223v2')
-    assert(down.get_identifier() == '1701.08223v2')
+    assert(down.uri == 'https://arxiv.org/abs/1701.08223v2')
+    assert(down._get_identifier() == '1701.08223v2')
 
 
 def test_downloader_getter():
     url = 'https://arxiv.org/abs/1001.3032'
-    down = papis.downloaders.get_downloader(url)
+    downs = papis.downloaders.get_matching_downloaders(url)
+    assert(len(downs) >= 1)
+    down = downs[0]
     assert(down.name == 'arxiv')
     assert(down.expected_document_extension == 'pdf')
-    #assert(down.get_doi() == '10.1021/ed044p128')
+    # assert(down.get_doi() == '10.1021/ed044p128')
     assert(len(down.get_bibtex_url()) > 0)
     assert(len(down.get_bibtex_data()) > 0)
     bibs = papis.bibtex.bibtex_to_dict(down.get_bibtex_data())
@@ -50,3 +54,19 @@ def test_downloader_getter():
     doc = down.get_document_data()
     assert(doc is not None)
     assert(down.check_document_format())
+
+
+def test_validate_arxivid():
+    # good
+    validate_arxivid('1206.6272')
+    validate_arxivid('1206.6272v1')
+    validate_arxivid('1206.6272v2')
+    assert(True)
+
+    for bad in ['1206.6272v3', 'blahv2']:
+        try:
+            validate_arxivid(bad)
+        except ValueError:
+            assert(True)
+        else:
+            assert(False)

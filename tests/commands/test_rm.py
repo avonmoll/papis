@@ -54,7 +54,7 @@ class TestCli(tests.cli.TestCli):
         result = self.invoke(['__no_document__'])
         self.assertTrue(result.exit_code == 0)
 
-    @patch('papis.pick.pick_doc', lambda x: None)
+    @patch('papis.pick.pick_doc', lambda x: [])
     def test_2_no_doc_picked(self):
         result = self.invoke(['turing'])
         self.assertTrue(result.exit_code == 0)
@@ -66,9 +66,9 @@ class TestCli(tests.cli.TestCli):
         docs = db.query_dict(dict(author='krish'))
         self.assertFalse(docs)
 
-    @patch('papis.utils.text_area', lambda **y: False)
-    @patch('papis.utils.confirm', lambda *x, **y: False)
-    @patch('papis.pick.pick_doc', lambda x: x[0] if x else None)
+    @patch('papis.tui.utils.text_area', lambda **y: False)
+    @patch('papis.tui.utils.confirm', lambda *x, **y: False)
+    @patch('papis.pick.pick_doc', lambda x: [x[0]] if x else [])
     def test_4_confirm(self):
         db = papis.database.get()
         docs = db.query_dict(dict(author='popper'))
@@ -78,9 +78,9 @@ class TestCli(tests.cli.TestCli):
         docs = db.query_dict(dict(author='popper'))
         self.assertTrue(docs)
 
-    @patch('papis.utils.text_area', lambda **y: False)
-    @patch('papis.utils.confirm', lambda *x, **y: True)
-    @patch('papis.pick.pick_doc', lambda x: x[0] if x else None)
+    @patch('papis.tui.utils.text_area', lambda **y: False)
+    @patch('papis.tui.utils.confirm', lambda *x, **y: True)
+    @patch('papis.pick.pick_doc', lambda x: [x[0]] if x else [])
     def test_5_confirm_true(self):
         db = papis.database.get()
         docs = db.query_dict(dict(author='popper'))
@@ -90,9 +90,9 @@ class TestCli(tests.cli.TestCli):
         docs = db.query_dict(dict(author='popper'))
         self.assertFalse(docs)
 
-    @patch('papis.utils.confirm', lambda *x, **y: True)
-    @patch('papis.pick.pick_doc', lambda x: x[0] if x else None)
-    @patch('papis.pick.pick', lambda x: None)
+    @patch('papis.tui.utils.confirm', lambda *x, **y: True)
+    @patch('papis.pick.pick_doc', lambda x: [x[0]] if x else [])
+    @patch('papis.pick.pick', lambda x: [])
     def test_7_confirm_file_nopick(self):
         db = papis.database.get()
         docs = db.query_dict(dict(author='turing'))
@@ -108,9 +108,9 @@ class TestCli(tests.cli.TestCli):
         Nf = len(docs[0].get_files())
         self.assertTrue(N == Nf)
 
-    @patch('papis.utils.confirm', lambda *x, **y: False)
-    @patch('papis.pick.pick_doc', lambda x: x[0] if x else None)
-    @patch('papis.pick.pick', lambda x: x[0] if x else None)
+    @patch('papis.tui.utils.confirm', lambda *x, **y: False)
+    @patch('papis.pick.pick_doc', lambda x: [x[0]] if x else [])
+    @patch('papis.pick.pick', lambda x: [x[0]] if x else [])
     def test_6_confirm_file(self):
         db = papis.database.get()
         docs = db.query_dict(dict(author='turing'))
@@ -127,9 +127,9 @@ class TestCli(tests.cli.TestCli):
         self.assertTrue(N == Nf)
 
 
-    @patch('papis.utils.confirm', lambda *x, **y: True)
-    @patch('papis.pick.pick_doc', lambda x: x[0] if x else None)
-    @patch('papis.pick.pick', lambda x: x[0] if x else None)
+    @patch('papis.tui.utils.confirm', lambda *x, **y: True)
+    @patch('papis.pick.pick_doc', lambda x: [x[0]] if x else [])
+    @patch('papis.pick.pick', lambda x: [x[0]] if x else [])
     def test_confirm_true_file(self):
         db = papis.database.get()
         docs = db.query_dict(dict(author='turing'))
@@ -144,3 +144,15 @@ class TestCli(tests.cli.TestCli):
         self.assertTrue(len(docs) == 1)
         Nf = len(docs[0].get_files())
         self.assertTrue(N == Nf+1)
+
+
+    def test_rm_all(self):
+        db = papis.database.get()
+        docs = db.query_dict(dict(author='test_author'))
+        self.assertTrue(len(docs) == 2)
+
+        result = self.invoke(['test_author', '--all', '--force'])
+        self.assertTrue(result.exit_code == 0)
+
+        docs = db.query_dict(dict(author='test_author'))
+        self.assertTrue(len(docs) == 0)

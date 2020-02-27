@@ -1,5 +1,15 @@
 import re
+import multiprocessing
+import operator
+import functools
+import time
+import logging
+from typing import (
+    Optional, Any, List, Generic, Sequence,
+    Callable, Tuple, Pattern, TypeVar)
+
 from prompt_toolkit.formatted_text.html import HTML
+from prompt_toolkit.formatted_text.base import FormattedText  # noqa: ignore
 from prompt_toolkit.layout.screen import Point
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -7,54 +17,62 @@ from prompt_toolkit.layout.containers import (
     Window, ConditionalContainer, WindowAlign, ScrollOffsets
 )
 from prompt_toolkit.filters import has_focus
-import multiprocessing
-
-import logging
-
-logger = logging.getLogger('tui:widget:list')
 
 
-def match_against_regex(regex, line, index):
+Option = TypeVar("Option")
+
+LOGGER = logging.getLogger('tui:widget:list')
+
+
+def match_against_regex(
+        regex: Pattern[str],
+        line: str,
+        index: int) -> Optional[int]:
+    """Return index if line matches regex"""
     return index if regex.match(line) else None
 
 
-class OptionsList(ConditionalContainer):
+class OptionsList(ConditionalContainer, Generic[Option]):  # type: ignore
+
+    """This is the main widget containing a list of items (options)
+    to select from.
+    """
 
     def __init__(
             self,
-            options,
-            default_index=0,
-            header_filter=lambda x: x,
-            match_filter=lambda x: x,
-            custom_filter=None,
-            search_buffer=Buffer(multiline=False),
-            cpu_count=multiprocessing.cpu_count()
-            ):
-
-        assert(isinstance(options, list))
-        assert(callable(header_filter))
-        assert(callable(match_filter))
-        assert(isinstance(default_index, int))
+            options: Sequence[Option],
+            default_index: int = 0,
+            header_filter: Callable[[Option], str] = str,
+            match_filter: Callable[[Option], str] = str,
+            custom_filter: Optional[Callable[[str], bool]] = None,
+            search_buffer: Buffer = Buffer(multiline=False),
+            cpu_count: int = multiprocessing.cpu_count()):
 
         self.search_buffer = search_buffer
-        self.last_query_text = ''
+        self.last_query_text = ''  # type: str
         self.search_buffer.on_text_changed += self.update
 
         self.header_filter = header_filter
         self.match_filter = match_filter
-        self.current_index = default_index
+        self.current_index = default_index  # type: Optional[int]
         self.entries_left_offset = 0
-        self.pool = multiprocessing.Pool(cpu_count)
+        self.cpu_count = cpu_count
 
-        self.options_headers_linecount = []
-        self._indices_to_lines = []
+        self.options_headers_linecount = []  # type: List[int]
+        self._indices_to_lines = []  # type: List[int]
 
-        self._options = []
-        self.marks = []
-        self.max_entry_height = 1
-        # Options are processed here also through the setter
-        self.options = options
-        self.cursor = Point(0, 0)
+        self.options_headers = []  # type: FormattedText
+        self.options_matchers = []  # type: List[str]
+        self.indices = []  # type: List[int]
+        self._options = []  # type: Sequence[Option]
+        self.marks = []  # type: List[int]
+        self.max_entry_height = 1  # type: int
+
+        # options are processed here also through the setter
+        # ##################################################
+        self.set_options(options)
+        self.cursor = Point(0, 0)  # type: Point
+        # ##################################################
 
         self.content = FormattedTextControl(
             text=self.get_tokens,
@@ -88,14 +106,12 @@ class OptionsList(ConditionalContainer):
             )
         )
 
-    def __del__(self):
-        # Clean initialized pool upon deleting of the object
-        self.pool.close()
-        self.pool.join()
-
-    def get_line_prefix(self, line, blih):
+    def get_line_prefix(
+            self,
+            line: int,
+            blih: Any) -> Optional[List[Tuple[str, str]]]:
         if self.current_index is None:
-            return
+            return None
         current_line = self.index_to_line(self.current_index)
         if (0 <= line - current_line
                 < self.options_headers_linecount[self.current_index]):
@@ -107,25 +123,30 @@ class OptionsList(ConditionalContainer):
             else:
                 return [('class:options_list.unselected_margin', ' ')]
 
-    def toggle_mark_current_selection(self):
+    def toggle_mark_current_selection(self) -> None:
         if self.current_index in self.marks:
             self.marks.pop(self.marks.index(self.current_index))
         else:
             self.mark_current_selection()
 
-    def mark_current_selection(self):
-        self.marks.append(self.current_index)
+    def mark_current_selection(self) -> None:
+        if self.current_index is not None:
+            self.marks.append(self.current_index)
 
-    @property
-    def options(self):
+    def get_options(self) -> Sequence[Option]:
+        """Get the original options
+        """
         return self._options
 
-    @options.setter
-    def options(self, new_options):
+    def set_options(self, new_options: Sequence[Option]) -> None:
+        """Set the options and process them"""
         self._options = new_options
         self.process_options()
 
-    def move_up(self):
+    def move_up(self) -> None:
+        """Move the cursor up whenever possible"""
+        if self.current_index is None:
+            return None
         try:
             index = self.indices.index(self.current_index)
             index -= 1
@@ -136,7 +157,10 @@ class OptionsList(ConditionalContainer):
         except ValueError:
             pass
 
-    def move_down(self):
+    def move_down(self) -> None:
+        """Move the cursor down whenever possible"""
+        if self.current_index is None:
+            return None
         try:
             index = self.indices.index(self.current_index)
             index += 1
@@ -147,23 +171,28 @@ class OptionsList(ConditionalContainer):
         except ValueError:
             pass
 
-    def go_top(self):
-        if len(self.indices) > 0:
+    def go_top(self) -> None:
+        """Go to top whenever possible"""
+        if self.indices:
             self.current_index = self.indices[0]
 
-    def deselect(self):
+    def deselect(self) -> None:
+        """Do not select any option"""
         self.current_index = None
 
-    def go_bottom(self):
+    def go_bottom(self) -> None:
+        """Go to bottom whenever possible"""
         if len(self.indices) > 0:
             self.current_index = self.indices[-1]
 
     @property
-    def query_text(self):
-        return self.search_buffer.text
+    def query_text(self) -> str:
+        """Get the query text"""
+        return str(self.search_buffer.text)
 
     @property
-    def search_regex(self):
+    def search_regex(self) -> Pattern[str]:
+        """Get and form the regular expression out of the query text"""
         cleaned_search = (
             self.query_text
             .replace('(', '\\(')
@@ -174,12 +203,14 @@ class OptionsList(ConditionalContainer):
         )
         return re.compile(r".*"+re.sub(r"\s+", ".*", cleaned_search), re.I)
 
-    def update(self, *args):
+    def update(self, *args: Any) -> None:
+        """Update the state"""
+        # The *args is important for the buffer
         self.filter_options()
         self._indices_to_lines = []
 
-    def filter_options(self, *args):
-        indices = []
+    def filter_options(self) -> None:
+        """Filter the items using the regular expression from the query"""
         regex = self.search_regex
 
         if self.query_text == self.last_query_text:
@@ -188,36 +219,43 @@ class OptionsList(ConditionalContainer):
         if self.query_text.startswith(self.last_query_text):
             search_indices = self.indices
         else:
-            search_indices = range(len(self.options_matchers))
+            search_indices = list(range(len(self.options_matchers)))
 
         self.last_query_text = self.query_text
 
-        result = [
-            self.pool.apply_async(
-                match_against_regex,
-                args=(regex, opt, i,)
-            )
-            for i, opt in enumerate(self.options_matchers)
-            if i in search_indices
-        ]
+        with multiprocessing.Pool(self.cpu_count) as pool:
+            results = [
+                pool.apply_async(
+                    match_against_regex,
+                    args=(regex, opt, i,)
+                )
+                for i, opt in enumerate(self.options_matchers)
+                if i in search_indices
+            ]
 
-        indices = [d.get() for d in result if d.get() is not None]
+            _maybe_indices = [d.get() for d in results]
+            self.indices = [i for i in _maybe_indices if i is not None]
 
-        self.indices = indices
-        if len(self.indices) and self.current_index not in self.indices:
+        if (self.indices
+                and self.current_index is not None
+                and self.current_index not in self.indices):
             if self.current_index > max(self.indices):
                 self.current_index = max(self.indices)
             else:
                 self.current_index = self.indices[0]
 
-    def get_selection(self):
-        if len(self.indices) and self.current_index is not None:
-            return self.options[self.current_index]
+    def get_selection(self) -> Sequence[Option]:
+        """Get the selected item, if there is Any"""
+        if self.indices and self.current_index is not None:
+            return [self.get_options()[self.current_index]]
+        return []
 
-    def update_cursor(self):
+    def update_cursor(self) -> None:
         """This function updates the cursor according to the current index
         in the list.
         """
+        if self.current_index is None:
+            return
         try:
             index = self.indices.index(self.current_index)
             line = sum(
@@ -228,15 +266,20 @@ class OptionsList(ConditionalContainer):
         except Exception:
             self.cursor = Point(0, 0)
 
-    def get_tokens(self):
+    def get_tokens(self) -> List[Tuple[str, str]]:
+        """Creates the body of the list, which is just a list of tuples,
+        where the tuples follow the FormattedText structure.
+        """
         self.update_cursor()
-        result = sum(
+        _t = time.time()
+        internal_text = functools.reduce(
+            operator.add,
             [self.options_headers[i] for i in self.indices],
-            []
-        )
-        return result
+            [])  # type: List[Tuple[str, str]]
+        LOGGER.debug("Create items in %f", time.time() - _t)
+        return internal_text
 
-    def index_to_line(self, index):
+    def index_to_line(self, index: int) -> int:
         if not self._indices_to_lines:
             options_headers_linecount = [
                 self.options_headers_linecount[i] if i in self.indices else 0
@@ -248,30 +291,30 @@ class OptionsList(ConditionalContainer):
             ]
         return self._indices_to_lines[index]
 
-    def process_options(self):
-        logger.debug('processing {0} options'.format(len(self.options)))
+    def process_options(self) -> None:
+        LOGGER.debug('processing %s options', len(self.get_options()))
         self.marks = []
-        self.options_headers_linecount = [
-            len(self.header_filter(o).split('\n'))
-            for o in self.options
-        ]
+
+        def _get_linecount(_o: Option) -> int:
+            return len(self.header_filter(_o).split('\n'))
+
+        self.options_headers_linecount = list(map(_get_linecount,
+                                                  self.get_options()))
         self.max_entry_height = max(self.options_headers_linecount)
-        logger.debug('processing headers')
+        LOGGER.debug('processing headers')
         self.options_headers = []
-        for o in self.options:
-            prestring = self.header_filter(o) + '\n'
+        for _opt in self.get_options():
+            prestring = self.header_filter(_opt) + '\n'
             try:
                 htmlobject = HTML(prestring).formatted_text
             except Exception as e:
-                logger.error(
-                    'Error processing html for \n {0} \n {1}'.format(
-                        prestring, e
-                    )
-                )
+                LOGGER.error(
+                    'Error processing html for \n %s \n %s', prestring, e)
                 htmlobject = [('fg:red', prestring)]
             self.options_headers += [htmlobject]
-        logger.debug('got {0} headers'.format(len(self.options_headers)))
-        logger.debug('processing matchers')
-        self.options_matchers = [self.match_filter(o) for o in self.options]
-        self.indices = range(len(self.options))
-        logger.debug('got {0} matchers'.format(len(self.options_matchers)))
+        LOGGER.debug('got %s headers', len(self.options_headers))
+        LOGGER.debug('processing matchers')
+        self.options_matchers = list(
+            map(self.match_filter, self.get_options()))
+        self.indices = list(range(len(self.get_options())))
+        LOGGER.debug('got %s matchers', len(self.options_matchers))

@@ -25,11 +25,11 @@ will tell you which commands are available.
 Let us suppose that you want to look for some documents on crossref,
 say some papers of Schroedinger, and you want to store them into a bibtex
 file called ``lib.bib``, then you could concatenate the commands
-``crossref`` and ``export --bibtex`` as such
+``crossref`` and ``export --format bibtex`` as such
 
 ::
 
-    papis explore crossref -a 'Schrodinger' export --bibtex lib.bib
+    papis explore crossref -a 'Schrodinger' export --format bibtex lib.bib
 
 This will store everything that you got from crossref in the file ``lib.bib``
 and store in bibtex format. ``explore`` is much more flexible than that,
@@ -39,7 +39,7 @@ the ``pick`` command will take care of it
 
 ::
 
-    papis explore crossref -a 'Schrodinger' pick export --bibtex lib.bib
+    papis explore crossref -a 'Schrodinger' pick export --format bibtex lib.bib
 
 notice how the ``pick`` command is situated before the ``export``.
 More generally you could write something like
@@ -50,9 +50,9 @@ More generally you could write something like
         crossref -a Schroedinger \\
         crossref -a Einstein \\
         arxiv -a 'Felix Hummel' \\
-        export --yaml docs.yaml \\
+        export --format yaml docs.yaml \\
         pick  \\
-        export --bibtex specially-picked-document.bib
+        export --format bibtex specially-picked-document.bib
 
 The upper command will look in crossref for documents authored by Schrodinger,
 then also by Einstein, and will look on the arxiv for papers authored by Felix
@@ -86,7 +86,7 @@ Cli
     :show-nested:
 """
 import os
-import papis.utils
+import papis.tui.utils
 import papis.commands
 import papis.document
 import papis.config
@@ -99,43 +99,22 @@ import papis.commands.export
 import papis.api
 import papis.pick
 import papis.crossref
-from stevedore import extension
+import papis.plugin
+from typing import List, Optional, Union, Any, Dict  # noqa: ignore
 
 logger = logging.getLogger('explore')
-explorer_mgr = None
 
 
-def stevedore_error_handler(manager, entrypoint, exception):
-    logger = logging.getLogger('cmds:stevedore')
-    logger.error("Error while loading entrypoint [%s]" % entrypoint)
-    logger.error(exception)
+def _extension_name() -> str:
+    return "papis.explorer"
 
 
-def _create_explorer_mgr():
-    global explorer_mgr
-
-    if explorer_mgr is not None:
-        return
-
-    explorer_mgr = extension.ExtensionManager(
-        namespace='papis.explorer',
-        invoke_on_load=False,
-        verify_requirements=True,
-        propagate_map_exceptions=True,
-        on_load_failure_callback=stevedore_error_handler
-    )
+def get_available_explorers() -> List[click.Command]:
+    return papis.plugin.get_available_plugins(_extension_name())
 
 
-def get_available_explorers():
-    global explorer_mgr
-    _create_explorer_mgr()
-    return [e.plugin for e in explorer_mgr.extensions]
-
-
-def get_explorer_mgr():
-    global explorer_mgr
-    _create_explorer_mgr()
-    return explorer_mgr
+def get_explorer_mgr() -> papis.plugin.ExtensionManager:
+    return papis.plugin.get_extension_manager(_extension_name())
 
 
 @click.command('lib')
@@ -144,7 +123,8 @@ def get_explorer_mgr():
 @papis.cli.query_option()
 @papis.cli.doc_folder_option()
 @click.option('--library', '-l', default=None, help='Papis library to look')
-def lib(ctx, query, doc_folder, library):
+def lib(ctx: click.Context, query: str,
+        doc_folder: str, library: Optional[str]) -> None:
     """
     Query for documents in your library
 
@@ -156,7 +136,7 @@ def lib(ctx, query, doc_folder, library):
     logger = logging.getLogger('explore:lib')
     if doc_folder:
         ctx.obj['documents'] += [papis.document.from_folder(doc_folder)]
-    db = papis.database.get(library=library)
+    db = papis.database.get(library_name=library)
     docs = db.query(query)
     logger.info('{} documents found'.format(len(docs)))
     ctx.obj['documents'] += docs
@@ -172,7 +152,7 @@ def lib(ctx, query, doc_folder, library):
     default=None,
     help='Pick automatically the n-th document'
 )
-def pick(ctx, number):
+def pick(ctx: click.Context, number: Optional[int]) -> None:
     """
     Pick a document from the retrieved documents
 
@@ -184,11 +164,11 @@ def pick(ctx, number):
     docs = ctx.obj['documents']
     if number is not None:
         docs = [docs[number - 1]]
-    doc = papis.pick.pick_doc(docs)
-    if not doc:
+    picked_docs = papis.pick.pick_doc(docs)
+    if not picked_docs:
         ctx.obj['documents'] = []
         return
-    ctx.obj['documents'] = [doc]
+    ctx.obj['documents'] = picked_docs
     assert(isinstance(ctx.obj['documents'], list))
 
 
@@ -213,7 +193,8 @@ def pick(ctx, number):
     "--max-citations", "-m", default=-1,
     help='Number of citations to be retrieved'
 )
-def citations(ctx, query, doc_folder, max_citations, save, rmfile):
+def citations(ctx: click.Context, query: str, doc_folder: str,
+              max_citations: int, save: bool, rmfile: bool) -> None:
     """
     Query the citations of a paper
 
@@ -221,7 +202,7 @@ def citations(ctx, query, doc_folder, max_citations, save, rmfile):
 
     Go through the citations of a paper and export it in a yaml file
 
-        papis explore citations 'einstein' export --yaml einstein.yaml
+        papis explore citations 'einstein' export --format yaml einstein.yaml
 
     """
     import tqdm
@@ -241,11 +222,18 @@ def citations(ctx, query, doc_folder, max_citations, save, rmfile):
         logger.warning(papis.strings.no_documents_retrieved_message)
         return
 
-    doc = papis.pick.pick_doc(documents)
-    if doc is None:
+    docs = papis.pick.pick_doc(documents)
+    if not docs:
         return
+    doc = docs[0]
+
     db = papis.database.get()
-    citations_file = os.path.join(doc.get_main_folder(), 'citations.yaml')
+
+    _main_folder = doc.get_main_folder()
+    if not _main_folder:
+        return
+
+    citations_file = os.path.join(_main_folder, 'citations.yaml')
 
     if os.path.exists(citations_file):
         if rmfile:
@@ -255,8 +243,10 @@ def citations(ctx, query, doc_folder, max_citations, save, rmfile):
             logger.info(
                 'A citations file exists in {0}'.format(citations_file)
             )
-            if papis.utils.confirm('Do you want to use it?'):
-                papis.yaml.explorer.callback(citations_file)
+            if papis.tui.utils.confirm('Do you want to use it?'):
+                # TODO: here it complains that papis.yaml.explorer.callback
+                #       None, somehow mypy does not get that.
+                papis.yaml.explorer.callback(citations_file)  # type: ignore
                 return
 
     if not doc.has('citations') or doc['citations'] == []:
@@ -273,8 +263,10 @@ def citations(ctx, query, doc_folder, max_citations, save, rmfile):
     dois = dois[0:min(max_citations, len(dois))]
 
     logger.info("%s citations found" % len(dois))
-    dois_with_data = []
-    found_in_lib_dois = []
+    dois_with_data = [
+    ]  # type: List[Union[papis.document.Document, Dict[str, Any]]]
+    found_in_lib_dois = [
+    ]  # type: List[Union[papis.document.Document, Dict[str, Any]]]
 
     logger.info("Checking which citations are already in the library")
     with tqdm.tqdm(iterable=dois) as progress:
@@ -331,7 +323,7 @@ def citations(ctx, query, doc_folder, max_citations, save, rmfile):
 @click.pass_context
 @click.help_option('--help', '-h')
 @click.argument('command', type=str)
-def cmd(ctx, command):
+def cmd(ctx: click.Context, command: str) -> None:
     """
     Run a general command on the document list
 
@@ -348,16 +340,18 @@ def cmd(ctx, command):
     logger = logging.getLogger('explore:cmd')
     docs = ctx.obj['documents']
     for doc in docs:
-        fcommand = papis.utils.format_doc(command, doc)
+        fcommand = papis.document.format_doc(command, doc)
         splitted_command = shlex.split(fcommand)
         logger.info('Calling %s' % splitted_command)
         call(splitted_command)
 
 
-@click.group("explore", invoke_without_command=False, chain=True)
+@click.group("explore",
+             cls=papis.cli.AliasedGroup,
+             invoke_without_command=False, chain=True)
 @click.help_option('--help', '-h')
 @click.pass_context
-def cli(ctx):
+def cli(ctx: click.Context) -> None:
     """
     Explore new documents using a variety of resources
     """

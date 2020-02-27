@@ -26,21 +26,20 @@ import papis.document
 from urllib.parse import urlencode
 import logging
 
+from typing import Optional
 
 logger = logging.getLogger('browse')
 
 
-def run(document):
-    """Browse document's url whenever possible.
+def run(document: papis.document.Document) -> Optional[str]:
+    """Browse document's url whenever possible and returns the url
 
     :document: Document object
-    :returns: Returns the url that is composed from the document
-    :rtype:  str
 
     """
     global logger
     url = None
-    key = papis.config.get("browse-key")
+    key = papis.config.getstring("browse-key")
 
     if document.has(key):
         if "doi" == key:
@@ -52,12 +51,15 @@ def run(document):
 
     if url is None or key == 'search-engine':
         params = {
-            'q': papis.utils.format_doc(
-                papis.config.get('browse-query-format'),
+            'q': papis.document.format_doc(
+                papis.config.getstring('browse-query-format'),
                 document
             )
         }
-        url = papis.config.get('search-engine') + '/?' + urlencode(params)
+        url = (
+            papis.config.getstring('search-engine') +
+            '/?' +
+            urlencode(params))
 
     logger.info("Opening url %s:" % url)
     papis.utils.general_open(url, "browser", wait=False)
@@ -67,29 +69,34 @@ def run(document):
 @click.command("browse")
 @click.help_option('--help', '-h')
 @papis.cli.query_option()
+@papis.cli.sort_option()
 @click.option(
     '-k', '--key', default='',
     help='Use the value of the document\'s key to open in the browser, e.g.'
          'doi, url, doc_url ...'
 )
-@click.option(
-    '--all', default=False, is_flag=True,
-    help='Browse all selected documents'
-)
-def cli(query, key, all):
+@papis.cli.all_option()
+def cli(
+        query: str,
+        key: str,
+        _all: bool,
+        sort_field: Optional[str],
+        sort_reverse: bool) -> None:
     """Open document's url in a browser"""
     documents = papis.database.get().query(query)
     logger = logging.getLogger('cli:browse')
 
     if len(documents) == 0:
         logger.warning(papis.strings.no_documents_retrieved_message)
-        return 0
+        return
 
-    if not all:
-        document = papis.pick.pick_doc(documents)
-        if not document:
+    if not _all:
+        documents = list(papis.pick.pick_doc(documents))
+        if not documents:
             return
-        documents = [document]
+
+    if sort_field:
+        documents = papis.document.sort(documents, sort_field, sort_reverse)
 
     if len(key):
         papis.config.set('browse-key', key)

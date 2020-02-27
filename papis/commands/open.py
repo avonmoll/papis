@@ -71,6 +71,11 @@ Cli
 .. click:: papis.commands.open:cli
     :prog: papis open
 """
+import os
+import logging
+from typing import Optional
+import click
+
 import papis
 import papis.api
 import papis.pick
@@ -78,107 +83,103 @@ import papis.utils
 import papis.config
 import papis.cli
 import papis.database
-import click
-import logging
-from papis.document import from_folder
+from papis.document import from_folder, Document, from_data, format_doc
 import papis.strings
 
 
-def run(document, opener=None, folder=False, mark=False):
+def run(document: Document, opener: Optional[str] = None,
+        folder: bool = False,
+        mark: bool = False) -> None:
     logger = logging.getLogger('open:run')
     if opener is not None:
         papis.config.set("opentool", opener)
 
+    _doc_folder = document.get_main_folder()
+    if _doc_folder is None:
+        raise Exception(papis.strings.no_folder_attached_to_document)
+
     if folder:
         # Open directory
-        papis.api.open_dir(document.get_main_folder())
+        papis.api.open_dir(_doc_folder)
     else:
         if mark:
             logger.debug("Getting document's marks")
-            marks = document[papis.config.get("mark-key-name")]
+            marks = document[papis.config.getstring("mark-key-name")]
             if marks:
                 logger.info("Picking marks")
-                mark = papis.api.pick(
+                _mark_fmt = papis.config.getstring("mark-header-format")
+                _mark_name = papis.config.getstring("mark-format-name")
+                _mark_opener = papis.config.getstring("mark-opener-format")
+                if not _mark_fmt:
+                    raise Exception("No mark header format")
+                if not _mark_name:
+                    raise Exception("No mark name format")
+                mark_dict = papis.api.pick(
                     marks,
-                    dict(
-                        header_filter=lambda x: papis.utils.format_doc(
-                            papis.config.get("mark-header-format"),
-                            x, key=papis.config.get("mark-format-name")
-                        ),
-                        match_filter=lambda x: papis.utils.format_doc(
-                            papis.config.get("mark-header-format"),
-                            x, key=papis.config.get("mark-format-name")
-                        )
-                    )
-                )
-                if mark:
-                    opener = papis.utils.format_doc(
-                        papis.config.get("mark-opener-format"),
-                        mark, key=papis.config.get("mark-format-name")
-                    )
+                    header_filter=lambda x: format_doc(
+                        _mark_fmt, x, key=_mark_name),
+                    match_filter=lambda x: format_doc(
+                        _mark_fmt, x, key=_mark_name))
+                if mark_dict:
+                    if not _mark_opener:
+                        raise Exception("mark-opener-format not set")
+                    opener = format_doc(
+                        _mark_opener, from_data(mark_dict[0]), key=_mark_name)
+                    logger.info("Setting opener to '%s'", opener)
                     papis.config.set("opentool", opener)
         files = document.get_files()
         if len(files) == 0:
             logger.error("The document chosen has no files attached")
-            return 1
-        file_to_open = papis.api.pick(
-            files,
-            pick_config=dict(
-                header_filter=lambda x: x.replace(
-                    document.get_main_folder(), ""
-                )
-            )
-        )
-        papis.api.open_file(file_to_open, wait=False)
+            return
+        files_to_open = papis.api.pick(files, header_filter=os.path.basename)
+        for file_to_open in files_to_open:
+            papis.api.open_file(file_to_open, wait=False)
 
 
 @click.command("open")
 @click.help_option('-h', '--help')
 @papis.cli.query_option()
+@papis.cli.sort_option()
 @papis.cli.doc_folder_option()
+@papis.cli.all_option()
 @click.option(
     "--tool",
     help="Tool for opening the file (opentool)",
-    default=""
-)
+    default="")
 @click.option(
     "-d",
     "--dir",
     "folder",
     help="Open directory",
     default=False,
-    is_flag=True
-)
-@click.option(
-    "--all",
-    help="Open all matching documents",
-    default=False,
-    is_flag=True
-)
+    is_flag=True)
 @click.option(
     "-m",
     "--mark/--no-mark",
     help="Open mark",
-    default=lambda: True if papis.config.get('open-mark') else False
-)
-def cli(query, doc_folder, tool, folder, all, mark):
+    default=lambda: True if papis.config.get('open-mark') else False)
+def cli(query: str, doc_folder: str, tool: str, folder: bool,
+        sort_field: Optional[str], sort_reverse: bool, _all: bool,
+        mark: bool) -> None:
     """Open document from a given library"""
     if tool:
         papis.config.set("opentool", tool)
     logger = logging.getLogger('cli:run')
 
-    documents = papis.database.get().query(query)
-
     if doc_folder:
         documents = [from_folder(doc_folder)]
+    else:
+        documents = papis.database.get().query(query)
+
+    if sort_field:
+        documents = papis.document.sort(documents, sort_field, sort_reverse)
 
     if not documents:
         logger.warning(papis.strings.no_documents_retrieved_message)
-        return 0
+        return
 
-    if not all:
-        documents = [papis.pick.pick_doc(documents)]
-        documents = [d for d in documents if d]
+    if not _all:
+        documents = [d for d in papis.pick.pick_doc(documents)]
 
     for document in documents:
         run(document, folder=folder, mark=mark)

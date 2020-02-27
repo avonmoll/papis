@@ -1,12 +1,18 @@
 import yaml
 import logging
-import papis.config
 import click
+import os
+from typing import Optional, List, Dict, Any
+
+import papis.utils
+import papis.config
+import papis.importer
+import papis.document
 
 logger = logging.getLogger("yaml")
 
 
-def data_to_yaml(yaml_path, data):
+def data_to_yaml(yaml_path: str, data: Dict[str, Any]) -> None:
     """
     Save data to yaml at path outpath
 
@@ -15,17 +21,24 @@ def data_to_yaml(yaml_path, data):
     :param data: Data in a dictionary
     :type  data: dict
     """
-    global logger
     with open(yaml_path, 'w+') as fd:
         yaml.dump(
             data,
             fd,
             allow_unicode=papis.config.getboolean("info-allow-unicode"),
-            default_flow_style=False
-        )
+            default_flow_style=False)
 
 
-def yaml_to_data(yaml_path):
+def exporter(documents: List[papis.document.Document]) -> str:
+    string = yaml.dump_all(
+        [papis.document.to_dict(document) for document in documents],
+        allow_unicode=True)
+    return str(string)
+
+
+def yaml_to_data(
+        yaml_path: str,
+        raise_exception: bool = False) -> Dict[str, Any]:
     """
     Convert a yaml file into a dictionary using the yaml module.
 
@@ -33,18 +46,19 @@ def yaml_to_data(yaml_path):
     :type  yaml_path: str
     :returns: Dictionary containing the info of the yaml file
     :rtype:  dict
+    :raises ValueError: If a yaml parsing error happens
     """
     global logger
     with open(yaml_path) as fd:
         try:
             data = yaml.safe_load(fd)
         except Exception as e:
-            logger.error(
-                'Error reading yaml file in {0}'.format(yaml_path) +
-                '\nPlease check it!\n\n{0}'.format(str(e))
-            )
+            if raise_exception:
+                raise ValueError(e)
+            logger.error("Yaml syntax error: \n\n{0}".format(e))
             return dict()
         else:
+            assert isinstance(data, dict)
             return data
 
 
@@ -52,7 +66,7 @@ def yaml_to_data(yaml_path):
 @click.pass_context
 @click.argument('yamlfile', type=click.Path(exists=True))
 @click.help_option('--help', '-h')
-def explorer(ctx, yamlfile):
+def explorer(ctx: click.Context, yamlfile: str) -> None:
     """
     Import documents from a yaml file
 
@@ -63,8 +77,29 @@ def explorer(ctx, yamlfile):
     """
     logger = logging.getLogger('explore:yaml')
     logger.info('reading in yaml file {}'.format(yamlfile))
-    docs = [
-        papis.document.from_data(d) for d in yaml.load_all(open(yamlfile))
-    ]
+    docs = [papis.document.from_data(d)
+            for d in yaml.safe_load_all(open(yamlfile))]
     ctx.obj['documents'] += docs
     logger.info('{} documents found'.format(len(docs)))
+
+
+class Importer(papis.importer.Importer):
+
+    """Importer that parses a yaml file"""
+
+    def __init__(self, uri: str) -> None:
+        papis.importer.Importer.__init__(self, name='yaml', uri=uri)
+
+    @classmethod
+    def match(cls, uri: str) -> Optional[papis.importer.Importer]:
+        importer = Importer(uri=uri)
+        if os.path.exists(uri) and not os.path.isdir(uri):
+            importer.fetch()
+            return importer if importer.ctx.data else None
+        return None
+
+    @papis.importer.cache
+    def fetch(self: papis.importer.Importer) -> Any:
+        self.ctx.data = yaml_to_data(self.uri, raise_exception=False)
+        if self.ctx:
+            self.logger.info("successfully read file = %s" % self.uri)

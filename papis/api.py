@@ -1,19 +1,20 @@
 """This module describes which functions are intended to be used by users to
 create papis scripts.
 """
-
+from typing import Any, Dict, List, Optional
 import logging
+
 import papis.utils
 import papis.commands
 import papis.config
 import papis.pick
 import papis.database
 
-logger = logging.getLogger("api")
-logger.debug("importing")
+LOGGER = logging.getLogger("api")
+LOGGER.debug("importing")
 
 
-def get_lib_name():
+def get_lib_name() -> str:
     """Get current library, it either retrieves the library from
     the environment PAPIS_LIB variable or from the command line
     args passed by the user.
@@ -27,7 +28,7 @@ def get_lib_name():
     return papis.config.get_lib_name()
 
 
-def set_lib_from_name(library):
+def set_lib_from_name(library: str) -> None:
     """Set current library, it either sets the library in
     the environment PAPIS_LIB variable or in the command line
     args passed by the user.
@@ -36,10 +37,10 @@ def set_lib_from_name(library):
     :type  library: str
 
     """
-    return papis.config.set_lib_from_name(library)
+    papis.config.set_lib_from_name(library)
 
 
-def get_libraries():
+def get_libraries() -> List[str]:
     """Get all libraries declared in the configuration. A library is discovered
     if the ``dir`` or ``dirs`` key defined in the library section.
 
@@ -52,44 +53,17 @@ def get_libraries():
     """
     libs = []
     config = papis.config.get_configuration()
-    for key in config.keys():
+    for key in config:
         if "dir" in config[key] or "dirs" in config[key]:
             libs.append(key)
     return libs
 
 
-def pick_doc(documents):
-    """Pick a document from documents with the correct formatting
-
-    :documents: List of documents
-    :returns: Document
-
-    """
-    return papis.pick.pick_doc(documents)
+pick_doc = papis.pick.pick_doc
+pick = papis.pick.pick
 
 
-def pick(options, pick_config={}):
-    """This is a wrapper for the various pickers that are supported.
-    Depending on the configuration different selectors or 'pickers'
-    are used.
-
-    :param options: List of different objects. The type of the objects within
-        the list must be supported by the pickers. This is the reason why this
-        function is difficult to generalize for external picker programs.
-    :type  options: list
-
-    :param pick_config: Dictionary with additional configuration for the used
-        picker. This depends on the picker.
-    :type  pick_config: dict
-
-    :returns: Returns elements of ``options``.
-    :rtype: Element(s) of ``options``
-
-    """
-    return papis.pick.pick(options, **pick_config)
-
-
-def open_file(file_path, wait=True):
+def open_file(file_path: str, wait: bool = True) -> None:
     """Open file using the ``opentool`` key value as a program to
     handle file_path.
 
@@ -99,10 +73,10 @@ def open_file(file_path, wait=True):
     :type  wait: bool
 
     """
-    papis.utils.general_open(file_path, "opentool", wait=wait)
+    papis.utils.open_file(file_path, wait=wait)
 
 
-def open_dir(dir_path, wait=True):
+def open_dir(dir_path: str, wait: bool = True) -> None:
     """Open dir using the ``file-browser`` key value as a program to
     open dir_path.
 
@@ -115,7 +89,7 @@ def open_dir(dir_path, wait=True):
     papis.utils.general_open(dir_path, "file-browser", wait=wait)
 
 
-def edit_file(file_path, wait=True):
+def edit_file(file_path: str, wait: bool = True) -> None:
     """Edit file using the ``editor`` key value as a program to
     handle file_path.
 
@@ -128,7 +102,8 @@ def edit_file(file_path, wait=True):
     papis.utils.general_open(file_path, "editor", wait=wait)
 
 
-def get_all_documents_in_lib(library=None):
+def get_all_documents_in_lib(
+        library: Optional[str] = None) -> List[papis.document.Document]:
     """Get ALL documents contained in the given library with possibly.
 
     :param library: Library name.
@@ -145,10 +120,11 @@ def get_all_documents_in_lib(library=None):
     0
 
     """
-    return papis.database.get(library=library).get_all_documents()
+    return papis.database.get(library).get_all_documents()
 
 
-def get_documents_in_dir(directory, search=""):
+def get_documents_in_dir(
+        directory: str, search: str = "") -> List[papis.document.Document]:
     """Get documents contained in the given folder with possibly a search
     string.
 
@@ -171,7 +147,9 @@ def get_documents_in_dir(directory, search=""):
     return get_documents_in_lib(directory, search)
 
 
-def get_documents_in_lib(library=None, search=""):
+def get_documents_in_lib(
+        library: Optional[str] = None,
+        search: str = "") -> List[papis.document.Document]:
     """Get documents contained in the given library with possibly a search
     string.
 
@@ -185,10 +163,10 @@ def get_documents_in_lib(library=None, search=""):
     :rtype: list
 
     """
-    return papis.database.get(library=library).query(search)
+    return papis.database.get(library).query(search)
 
 
-def clear_lib_cache(lib=None):
+def clear_lib_cache(lib: Optional[str] = None) -> None:
     """Clear cache associated with a library. If no library is given
     then the current library is used.
 
@@ -201,7 +179,7 @@ def clear_lib_cache(lib=None):
     papis.database.get(lib).clear()
 
 
-def doi_to_data(doi):
+def doi_to_data(doi: str) -> Dict[str, Any]:
     """Try to get from a DOI expression a dictionary with the document's data
     using the crossref module.
 
@@ -210,4 +188,5 @@ def doi_to_data(doi):
     :returns: Document's data
     :rtype: dict
     """
+    import papis.crossref
     return papis.crossref.doi_to_data(doi)

@@ -9,9 +9,10 @@ import papis.document
 from papis.document import from_data
 from papis.utils import (
     get_cache_home, create_identifier, locate_document,
-    general_open, format_doc, input, clean_document_name,
-    confirm, get_document_extension,
+    general_open, clean_document_name,
 )
+from papis.filetype import get_document_extension
+
 
 def test_get_cache_home():
     os.environ["XDG_CACHE_HOME"] = '~/.cache'
@@ -20,14 +21,13 @@ def test_get_cache_home():
             os.path.join(os.environ["XDG_CACHE_HOME"], 'papis')
         )
     )
-    os.environ["XDG_CACHE_HOME"] = '/tmp/.cache'
-    assert(get_cache_home() == '/tmp/.cache/papis')
+    os.environ["XDG_CACHE_HOME"] = os.path.abspath('/tmp/.cache')
+    assert(get_cache_home() == os.path.abspath('/tmp/.cache/papis'))
     assert(os.path.exists(get_cache_home()))
     del os.environ["XDG_CACHE_HOME"]
-    assert(
-        get_cache_home() == os.path.expanduser(
-            os.path.join('~/.cache', 'papis')
-        )
+    assert (
+        get_cache_home() ==
+        os.path.abspath(os.path.expanduser(os.path.join('~/.cache', 'papis')))
     )
     tmp = os.path.join(tempfile.mkdtemp(), 'blah')
     papis.config.set('cache-dir', tmp)
@@ -102,24 +102,6 @@ def test_locate_document():
     assert found_doc is None
 
 
-def test_format_doc():
-    tests.setup_test_library()
-    document = from_data(dict(author='Fulano', title='Something'))
-
-    papis.config.set('format-jinja2-enable', True)
-    assert format_doc('{{doc["author"]}}{{doc["title"]}}', document) == \
-        'FulanoSomething'
-    assert format_doc(
-        '{{doc["author"]}}{{doc["title"]}}{{doc["blahblah"]}}', document
-    ) == 'FulanoSomething'
-
-    papis.config.set('format-jinja2-enable', False)
-    assert format_doc('{doc[author]}{doc[title]}', document) == \
-        'FulanoSomething'
-    assert format_doc('{doc[author]}{doc[title]}{doc[blahblah]}', document) ==\
-        'FulanoSomething'
-
-
 def test_extension():
     docs = [
         [tests.create_random_pdf(), "pdf"],
@@ -145,26 +127,3 @@ def test_slugify():
     )
     assert(clean_document_name('масса и енергиа.pdf') == 'massa-i-energia.pdf')
     assert(clean_document_name('الامير الصغير.pdf') == 'lmyr-lsgyr.pdf')
-
-
-def test_confirm():
-    with patch('papis.utils.input', lambda prompt, **x: 'y'):
-        assert(confirm('This is true'))
-    with patch('papis.utils.input', lambda prompt, **x: 'Y'):
-        assert(confirm('This is true'))
-    with patch('papis.utils.input', lambda prompt, **x: 'n'):
-        assert(not confirm('This is false'))
-    with patch('papis.utils.input', lambda prompt, **x: 'N'):
-        assert(not confirm('This is false'))
-
-    with patch('papis.utils.input', lambda prompt, **x: '\n'):
-        assert(confirm('This is true'))
-    with patch('papis.utils.input', lambda prompt, **x: '\n'):
-        assert(not confirm('This is false', yes=False))
-
-
-def test_input():
-    with patch('prompt_toolkit.prompt', lambda p, **x: 'Hello World'):
-        assert(input('What: ') == 'Hello World')
-    with patch('prompt_toolkit.prompt', lambda p, **x: ''):
-        assert(input('What: ', default='Bye') == 'Bye')

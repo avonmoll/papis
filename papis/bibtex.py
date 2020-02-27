@@ -1,110 +1,46 @@
 from __future__ import unicode_literals
 from __future__ import absolute_import, division, print_function
+
 import logging
 import os
+import re
+from typing import Optional, List, Dict, Any
+
 import papis.config
 import click
+import papis.importer
+import papis.filetype
 import papis.document
 
-logger = logging.getLogger("bibtex")
+logger = logging.getLogger("bibtex")  # type: logging.Logger
 
 bibtex_types = [
-  "article",
-  "book",
-  "booklet",
-  "conference",
-  "inbook",
-  "incollection",
-  "inproceedings",
-  "manual",
-  "mastersthesis",
-  "misc",
-  "phdthesis",
-  "proceedings",
-  "techreport",
-  "unpublished"
-] + papis.config.getlist('extra-bibtex-types')
+  "article", "book", "booklet", "conference", "inbook", "incollection",
+  "inproceedings", "manual", "mastersthesis", "misc", "phdthesis",
+  "proceedings", "techreport", "unpublished"
+] + papis.config.getlist('extra-bibtex-types')  # type: List[str]
 
 bibtex_type_converter = {
   "conferencePaper": "inproceedings",
   "journalArticle": "article",
-  "journal": "article",
-  "bookSection": "inbook"
-}
+  "journal": "article"
+}  # type: Dict[str, str]
 
 bibtex_keys = [
-    "addendum",
-    "address",
-    "afterword",
-    "annotator",
-    "annote",
-    "author",
-    "bookauthor",
-    "booksubtitle",
-    "booktitle",
-    "booktitleaddon",
-    "chapter",
-    "commentator",
-    "crossref",
-    "date",
-    "doi",
-    "edition",
-    "editor",
-    "editora",
-    "editorb",
-    "editorc",
-    "eid",
-    "eprint",
-    "eprintclass",
-    "eprinttype",
-    "eventdate",
-    "eventtitle",
-    "eventtitleaddon",
-    "foreword",
-    "holder",
-    "howpublished",
-    "institution",
-    "introduction",
-    "isbn",
-    "isrn",
-    "issn",
-    "issue",
-    "issuesubtitle",
-    "issuetitle",
-    "journal",
-    "journalsubtitle",
-    "journaltitle",
-    "key",
-    "language",
-    "location",
-    "mainsubtitle",
-    "maintitle",
-    "maintitleaddon",
-    "month",
-    "note",
-    "number",
-    "organization",
-    "origlanguage",
-    "pages",
-    "pagetotal",
-    "part",
-    "publisher",
-    "pubstate",
-    "school",
-    "series",
-    "subtitle",
-    "title",
-    "translator",
-    "type",
-    "titleaddon",
-    "url",
-    "urldate",
-    "venue",
-    "version",
-    "volume",
-    "volumes",
-    "year",
-] + papis.config.getlist('extra-bibtex-keys')
+    "addendum", "address", "afterword", "annotator", "annote", "author",
+    "bookauthor", "booksubtitle", "booktitle", "booktitleaddon", "chapter",
+    "commentator", "crossref", "date", "doi", "edition", "editor", "editora",
+    "editorb", "editorc", "eid", "eprint", "eprintclass", "eprinttype",
+    "eventdate", "eventtitle", "eventtitleaddon", "foreword", "holder",
+    "howpublished", "institution", "introduction", "isbn", "isrn",
+    "issn", "issue", "issuesubtitle", "issuetitle", "journal",
+    "journalsubtitle", "journaltitle", "key", "language", "location",
+    "mainsubtitle", "maintitle", "maintitleaddon", "month", "note",
+    "number", "organization", "origlanguage", "pages", "pagetotal", "part",
+    "publisher", "pubstate", "school", "series", "subtitle", "title",
+    "translator", "type", "titleaddon", "url", "urldate", "venue", "version",
+    "volume", "volumes", "year",
+] + papis.config.getlist('extra-bibtex-keys')  # type: List[str]
 
 bibtex_key_converter = {
     "abstractNote": "abstract",
@@ -113,14 +49,49 @@ bibtex_key_converter = {
     "place": "location",
     "publicationTitle": "journal",
     "proceedingsTitle": "booktitle"
-}
+}  # type: Dict[str, str]
+
+
+def exporter(documents: List[papis.document.Document]) -> str:
+    return '\n'.join(to_bibtex(document) for document in documents)
+
+
+class Importer(papis.importer.Importer):
+
+    """Importer that parses a bibtex files"""
+
+    def __init__(self, **kwargs: Any):
+        papis.importer.Importer.__init__(self, name='bibtex', **kwargs)
+
+    @classmethod
+    def match(cls, uri: str) -> Optional[papis.importer.Importer]:
+        if (not os.path.exists(uri) or os.path.isdir(uri) or
+                papis.filetype.get_document_extension(uri) == 'pdf'):
+            return None
+        importer = Importer(uri=uri)
+        importer.fetch()
+        return importer if importer.ctx else None
+
+    @papis.importer.cache
+    def fetch(self: papis.importer.Importer) -> Any:
+        self.logger.info("Reading input file = %s" % self.uri)
+        try:
+            bib_data = bibtex_to_dict(self.uri)
+            if len(bib_data) > 1:
+                self.logger.warning(
+                    'Your bibtex file contains more than one entry,'
+                    ' I will be taking the first entry')
+            if bib_data:
+                self.ctx.data = bib_data[0]
+        except Exception as e:
+            self.logger.debug(e)
 
 
 @click.command('bibtex')
 @click.pass_context
 @click.argument('bibfile', type=click.Path(exists=True))
 @click.help_option('--help', '-h')
-def explorer(ctx, bibfile):
+def explorer(ctx: click.core.Context, bibfile: str) -> None:
     """
     Import documents from a bibtex file
 
@@ -133,13 +104,12 @@ def explorer(ctx, bibfile):
     logger.info('Reading in bibtex file {}'.format(bibfile))
     docs = [
         papis.document.from_data(d)
-        for d in papis.bibtex.bibtex_to_dict(bibfile)
-    ]
+        for d in bibtex_to_dict(bibfile)]
     ctx.obj['documents'] += docs
     logger.info('{} documents found'.format(len(docs)))
 
 
-def bibtexparser_entry_to_papis(entry):
+def bibtexparser_entry_to_papis(entry: Dict[str, str]) -> Dict[str, str]:
     """Convert keys of a bib entry in bibtexparser format to papis compatible
     format.
 
@@ -148,20 +118,34 @@ def bibtexparser_entry_to_papis(entry):
     :returns: Dictionary with keys of papis format.
 
     """
-    result = dict()
-    for key in entry.keys():
-        if key == 'ID':
-            result['ref'] = entry[key]
-        elif key == 'ENTRYTYPE':
-            result['type'] = entry[key]
-        elif key == 'link':
-            result['url'] = entry[key]
-        else:
-            result[key] = entry[key]
+    from bibtexparser.customization import splitname
+
+    def to_author_list(authors: str) -> List[Dict[str, str]]:
+        author_list = []
+        for author in re.split(r"\s+and\s+", authors):
+            parts = splitname(author)
+            given = " ".join(parts["first"])
+            family = " ".join(parts["von"] + parts["last"] + parts["jr"])
+
+            author_list.append(dict(family=family, given=given))
+
+        return author_list
+
+    _k = papis.document.KeyConversionPair
+    key_conversion = [
+        _k("ID", [{"key": "ref", "action": None}]),
+        _k("ENTRYTYPE", [{"key": "type", "action": None}]),
+        _k("link", [{"key": "url", "action": None}]),
+        _k("author", [{"key": "author_list", "action": to_author_list}]),
+    ]
+
+    result = papis.document.keyconversion_to_data(
+        key_conversion, entry, keep_unknown_keys=True)
+
     return result
 
 
-def bibtex_to_dict(bibtex):
+def bibtex_to_dict(bibtex: str) -> List[Dict[str, str]]:
     """
     Convert bibtex file to dict
 
@@ -177,10 +161,11 @@ def bibtex_to_dict(bibtex):
     """
     from bibtexparser.bparser import BibTexParser
 
-    parser = BibTexParser(common_strings=True)
-    parser.ignore_nonstandard_types = False
-    parser.homogenise_fields = False
-    parser.interpolate_strings = True
+    parser = BibTexParser(
+            common_strings=True,
+            ignore_nonstandard_types=False,
+            homogenize_fields=False,
+            interpolate_strings=True)
 
     # bibtexparser has too many debug messages to be useful
     logging.getLogger("bibtexparser.bparser").setLevel(logging.WARNING)
@@ -196,7 +181,85 @@ def bibtex_to_dict(bibtex):
     return [bibtexparser_entry_to_papis(entry) for entry in entries]
 
 
-def unicode_to_latex(text):
+def to_bibtex(document: papis.document.Document) -> str:
+    """Create a bibtex string from document's information
+
+    :param document: Papis document
+    :type  document: Document
+    :returns: String containing bibtex formating
+    :rtype:  str
+
+    """
+    logger = logging.getLogger("document:bibtex")
+    bibtex_string = ""
+    bibtex_type = ""
+
+    # First the type, article ....
+    if "type" in document.keys():
+        if document["type"] in bibtex_types:
+            bibtex_type = document["type"]
+        elif document["type"] in bibtex_type_converter.keys():
+            bibtex_type = bibtex_type_converter[document["type"]]
+    if not bibtex_type:
+        bibtex_type = "article"
+
+    # REFERENCE BUILDING
+    if document.has("ref"):
+        ref = document["ref"]
+    elif papis.config.get('ref-format'):
+        try:
+            ref = papis.document.format_doc(
+                papis.config.getstring("ref-format"),
+                document
+            ).replace(" ", "")
+        except Exception as e:
+            logger.error(e)
+            ref = None
+
+    logger.debug("generated ref=%s" % ref)
+    if not ref:
+        if document.has('doi'):
+            ref = document['doi']
+        else:
+            folder = document.get_main_folder()
+            if folder:
+                ref = os.path.basename(folder)
+            else:
+                ref = 'noreference'
+
+    ref = re.sub(r'[;,()\/{}\[\]]', '', ref)
+    logger.debug("Used ref=%s" % ref)
+
+    bibtex_string += "@{type}{{{ref},\n".format(type=bibtex_type, ref=ref)
+    for bibKey in list(document.keys()):
+        if bibKey in bibtex_key_converter:
+            new_bibkey = bibtex_key_converter[bibKey]
+            document[new_bibkey] = document[bibKey]
+    for bibKey in sorted(document.keys()):
+        logger.debug('%s : %s' % (bibKey, document[bibKey]))
+        if bibKey in bibtex_keys:
+            value = str(document[bibKey])
+            if not papis.config.getboolean('bibtex-unicode'):
+                value = unicode_to_latex(value)
+            if bibKey == 'journal':
+                journal_key = papis.config.getstring('bibtex-journal-key')
+                if journal_key in document.keys():
+                    bibtex_string += "  %s = {%s},\n" % (
+                        'journal',
+                        unicode_to_latex(str(document[journal_key]))
+                    )
+                elif journal_key not in document.keys():
+                    logger.warning(
+                        "Key '{0}' is not present for ref={1}"
+                        .format(journal_key, document["ref"]))
+                    bibtex_string += "  %s = {%s},\n" % ('journal', value)
+            else:
+                bibtex_string += "  %s = {%s},\n" % (bibKey, value)
+    bibtex_string += "}\n"
+    return bibtex_string
+
+
+def unicode_to_latex(text: str) -> str:
     """
     unicode_to_latex - what it says
 
@@ -617,7 +680,7 @@ def unicode_to_latex(text):
         u"\u03A3": r"\ensuremath{\Sigma}",
         u"\u03A4": r"\ensuremath{\Tau}",
         # note non-raw string (\u confuses Python)
-        u"\u03A5": "\\ensuremath{\\Upsilon}",
+        u"\u03A5": r"\ensuremath{\Upsilon}",
         u"\u03A6": r"\ensuremath{\Phi}",
         u"\u03A7": r"\ensuremath{\Chi}",
         u"\u03A8": r"\ensuremath{\Psi}",
@@ -629,7 +692,7 @@ def unicode_to_latex(text):
         u"\u03AE": r"\acute{\eta}",
         u"\u03AF": r"\acute{\iota}",
         # note non-raw string (\u confuses Python)
-        u"\u03B0": "\\acute{\\ddot{\\upsilon}}",
+        u"\u03B0": r"\acute{\ddot{\upsilon}}",
         u"\u03B1": r"\ensuremath{\alpha}",
         u"\u03B2": r"\ensuremath{\beta}",
         u"\u03B3": r"\ensuremath{\gamma}",
@@ -2369,7 +2432,7 @@ def unicode_to_latex(text):
         u"\uD6F4": r"\mathsl{\Sigma}",
         u"\uD6F5": r"\mathsl{\Tau}",
         # note non-raw string (\u confuses Python)
-        u"\uD6F6": "\mathsl{\\Upsilon}",
+        u"\uD6F6": r"\mathsl{\Upsilon}",
         u"\uD6F7": r"\mathsl{\Phi}",
         u"\uD6F8": r"\mathsl{\Chi}",
         u"\uD6F9": r"\mathsl{\Psi}",

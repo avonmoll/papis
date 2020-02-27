@@ -92,27 +92,6 @@ General settings
 
     Default format that is used to show a document in order to select it.
 
-.. papis-config:: format-jinja2-enable
-
-    This setting is to enable the `jinja2 <http://jinja.pocoo.org//>`_ template
-    engine to render the papis templates being used, as ``header-format``,
-    ``match-format`` etc...
-
-    For instance you could set the option ``header-format`` to
-
-    .. code:: html
-
-        <span color='#ff00ff'>{{doc.html_escape["title"]}}</span>
-        <span color='#00ff00'>  {{doc.html_escape["author"]}}</span>
-        <span color='#00ffaa'>   ({{doc.html_escape["year"]}}) </span>
-        {%- if doc.has('tags') %}<span>[<yellow>{{doc['tags']}}</yellow>] </span>{%- endif %}
-        {%- if doc.has('citations') %}<red>{{doc['citations']|length}}</red>{%- endif %}
-        {%- if doc.has('url') %}
-        <span>    {{doc.html_escape["url"]}}</span>
-        {%- endif %}
-
-    To use it, just install jinja2.
-
 .. papis-config:: header-format-file
 
     This option should have the path of a file with the ``header-format``
@@ -278,7 +257,7 @@ Bibtex options
 
 .. papis-config:: add-file-name
 
-    Same as ``add-name``, but for files, not folders. If it is not set,
+    Same as ``add-folder-name``, but for files, not folders. If it is not set,
     the names of the files will be cleaned and taken `as-is`.
 
 .. papis-config:: add-interactive
@@ -617,3 +596,19 @@ Other
         ...
 
     so you will know exactly what is going on.
+
+.. papis-config:: sort-field
+
+  As of version ``0.10``, some command line commands have the ``--sort`` option
+  to sort the documents according to a given field. If you set
+  ``sort-field`` in your configuration file, this will sort by default
+  the documents according to this sort field. For instance,
+  if you want your documents by default to be sorted by ``year``, you
+  would set ``sort-field = year``.
+
+.. papis-config:: time-stamp
+
+  Wether or not to add a timestamp to a document when is being added to
+  papis. If documents have a timestamp, then they will be sortable
+  using `--sort time-added` option.
+

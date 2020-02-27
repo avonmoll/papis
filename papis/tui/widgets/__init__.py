@@ -1,52 +1,58 @@
-from prompt_toolkit.formatted_text.html import HTML
-from prompt_toolkit.filters import has_focus, Condition
+from typing import Any
+
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.filters import has_focus, Condition
+from prompt_toolkit.formatted_text.html import HTML
 from prompt_toolkit.layout.containers import (
-    HSplit, Window, WindowAlign, ConditionalContainer
-)
+    HSplit, Window, WindowAlign, ConditionalContainer)
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout import Dimension
-from prompt_toolkit.layout.controls import (
-    BufferControl,
-    FormattedTextControl
-)
-from prompt_toolkit.widgets import (
-    HorizontalLine
-)
 from prompt_toolkit.lexers import PygmentsLexer
+from prompt_toolkit.widgets import HorizontalLine
+
 from pygments.lexers import find_lexer_class_by_name
-import logging
 
 from .list import OptionsList
 from .command_line_prompt import CommandLinePrompt
 
-logger = logging.getLogger('pick')
+
+__all__ = [
+    "OptionsList",
+    "CommandLinePrompt",
+    "MessageToolbar",
+    "InfoWindow",
+    "HelpWindow",
+]
 
 
-class MessageToolbar(ConditionalContainer):
+class MessageToolbar(ConditionalContainer):  # type: ignore
+    # TODO: add stubs to be able to remove type ignore above
 
-    def __init__(self, style=""):
+    def __init__(self, style: str = "") -> None:
         self.message = None
         self.text_control = FormattedTextControl(text="")
         super(MessageToolbar, self).__init__(
             content=Window(
-                style=style, content=self.text_control,
+                style=style,
+                content=self.text_control,
                 height=1
             ),
             filter=Condition(lambda: self.text)
         )
 
     @property
-    def text(self):
+    def text(self) -> Any:
         return self.text_control.text
 
     @text.setter
-    def text(self, value):
+    def text(self, value: str) -> None:
         self.text_control.text = value
 
 
-class InfoWindow(ConditionalContainer):
+class InfoWindow(ConditionalContainer):  # type: ignore
+    # TODO: add stubs to be able to remove type ignore above
 
-    def __init__(self, lexer_name='yaml'):
+    def __init__(self, lexer_name: str = 'yaml') -> None:
         self.buf = Buffer()
         self.buf.text = ''
         self.lexer = PygmentsLexer(find_lexer_class_by_name(lexer_name))
@@ -62,17 +68,18 @@ class InfoWindow(ConditionalContainer):
         )
 
     @property
-    def text(self):
+    def text(self) -> Any:
         return self.buf.text
 
     @text.setter
-    def text(self, text):
+    def text(self, text: str) -> None:
         self.buf.text = text
 
 
-class HelpWindow(ConditionalContainer):
+class HelpWindow(ConditionalContainer):  # type: ignore
+    # TODO: add stubs to be able to remove type ignore above
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.text_control = FormattedTextControl(
             text=HTML('')
         )
@@ -87,9 +94,9 @@ class HelpWindow(ConditionalContainer):
         )
 
     @property
-    def text(self):
+    def text(self) -> Any:
         return self.text_control.text
 
     @text.setter
-    def text(self, value):
+    def text(self, value: str) -> None:
         self.text_control.text = value
